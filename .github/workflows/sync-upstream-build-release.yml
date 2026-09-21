@@ -1,0 +1,131 @@
+# 同步上游并构建 Release APK
+#
+# 功能：
+# 1. 每小时检查上游 HaoZai000/NexioSchedule 是否有新提交
+# 2. 有更新时：将 fork 的 master 同步到上游最新，并重新应用「下课自动关闭可选」功能补丁
+# 3. 构建 R8 优化后的 release APK（调试密钥签名，可直接安装）
+# 4. 上传构建产物 + 发布 GitHub Release
+#
+# 首次部署后请在 Actions 页面手动 Run workflow 一次，生成第一个 APK。
+
+name: 同步上游并构建 Release APK
+
+"on":
+  schedule:
+    - cron: '0 * * * *'          # 每小时检查上游是否有新提交
+  workflow_dispatch: {}          # 支持手动触发
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库（含完整历史）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 git 并拉取上游
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/HaoZai000/NexioSchedule.git
+          git fetch upstream master
+
+      - name: 判断上游是否有新提交
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            echo "✅ 当前已是最新上游"
+          else
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=$(git rev-parse --short upstream/master)" >> "$GITHUB_OUTPUT"
+            echo "🔄 检测到上游新提交 $(git rev-parse --short upstream/master)"
+          fi
+
+      - name: 同步 fork 代码到上游最新
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          git merge --ff-only upstream/master
+          git push origin master
+
+      - name: 从上游最新代码构建（应用功能补丁）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          git checkout -B build-snapshot upstream/master
+          # 应用「下课自动关闭可选」补丁；--3way 失败时降级普通 apply
+          git apply --3way patches/class-dnd-auto-end.patch || git apply patches/class-dnd-auto-end.patch
+          git status --short
+
+      - name: 设置 JDK 17
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Android SDK 组件（platform 37）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+
+      - name: 构建 Release APK（R8 优化）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon
+
+      - name: 签名 APK（测试调试密钥）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          # 从 base64 还原测试签名密钥（标准 Android debug keystore，密码 android，仅用于测试签名）
+          base64 -d signing/debug.keystore.b64 > signing/debug.keystore
+          chmod 600 signing/debug.keystore
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT="$SDK_ROOT/build-tools/37.0.0"
+          mkdir -p app/build/outputs/final
+          "$BT/zipalign" -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/final/aligned.apk
+          "$BT/apksigner" sign --ks signing/debug.keystore --ks-pass pass:android \
+            --out app/build/outputs/final/NexioSchedule-nightly.apk app/build/outputs/final/aligned.apk
+          "$BT/apksigner" verify app/build/outputs/final/NexioSchedule-nightly.apk
+          ls -lh app/build/outputs/final/
+
+      - name: 上传 APK 构建产物
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexioSchedule-release-apk
+          path: app/build/outputs/final/*.apk
+
+      - name: 发布 GitHub Release
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="nightly-$(date +%Y%m%d-%H%M)"
+          UPSTREAM=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
+          gh release create "$TAG" app/build/outputs/final/*.apk \
+            --title "夜版构建 $TAG" \
+            --notes "基于上游 \`$UPSTREAM\` + 「上课勿扰·下课自动关闭可选」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
+
+      - name: 同步/构建失败时创建 Issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open' }).catch(() => ({ data: [] }));
+            if (!data.some(i => i.title.includes('自动同步/构建失败'))) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '⚠️ 自动同步/构建失败',
+                body: '上游同步、补丁应用或构建失败，请人工处理。查看 Actions 日志定位原因。',
+                labels: ['bug']
+              });
+            }
