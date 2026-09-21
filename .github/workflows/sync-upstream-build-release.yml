@@ -115,5 +115,6 @@ jobs:
           TAG="nightly-$(date +%Y%m%d-%H%M)"
           UPSTREAM=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
           gh release create "$TAG" app/build/outputs/final/*.apk \
+            --repo xiaoxun007/NexioSchedule \
             --title "夜版构建 $TAG" \
             --notes "基于上游 \`$UPSTREAM\` + 「上课勿扰·下课自动关闭可选」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
