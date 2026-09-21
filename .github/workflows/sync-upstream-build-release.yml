@@ -57,9 +57,13 @@ jobs:
       - name: 从上游最新代码构建（应用功能补丁）
         if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
         run: |
+          # 补丁与签名密钥存放在 master 分支；checkout 到 build-snapshot 后从 master 取出
           git checkout -B build-snapshot upstream/master
+          git show master:patches/class-dnd-auto-end.patch > /tmp/class-dnd-auto-end.patch
+          mkdir -p signing
+          git show master:signing/debug.keystore.b64 > signing/debug.keystore.b64
           # 应用「下课自动关闭可选」补丁；--3way 失败时降级普通 apply
-          git apply --3way patches/class-dnd-auto-end.patch || git apply patches/class-dnd-auto-end.patch
+          git apply --3way /tmp/class-dnd-auto-end.patch || git apply /tmp/class-dnd-auto-end.patch
           git status --short
 
       - name: 设置 JDK 17
@@ -113,19 +117,3 @@ jobs:
           gh release create "$TAG" app/build/outputs/final/*.apk \
             --title "夜版构建 $TAG" \
             --notes "基于上游 \`$UPSTREAM\` + 「上课勿扰·下课自动关闭可选」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
-
-      - name: 同步/构建失败时创建 Issue
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open' }).catch(() => ({ data: [] }));
-            if (!data.some(i => i.title.includes('自动同步/构建失败'))) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: '⚠️ 自动同步/构建失败',
-                body: '上游同步、补丁应用或构建失败，请人工处理。查看 Actions 日志定位原因。',
-                labels: ['bug']
-              });
-            }
