@@ -51,7 +51,8 @@ jobs:
       - name: 同步 fork 代码到上游最新
         if: steps.check.outputs.has_update == 'true'
         run: |
-          git merge --ff-only upstream/master
+          # fork master 上有 workflow/patches/signing 等自身提交，与上游分叉，用普通 merge 保留这些文件
+          git merge upstream/master --no-edit -m "sync: 同步上游 $(git rev-parse --short upstream/master)"
           git push origin master
 
       - name: 从上游最新代码构建（应用功能补丁）
