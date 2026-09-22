@@ -52,7 +52,12 @@ jobs:
         if: steps.check.outputs.has_update == 'true'
         run: |
           # fork master 上有 workflow/patches/signing 等自身提交，与上游分叉，用普通 merge 保留这些文件
-          git merge upstream/master --no-edit -m "sync: 同步上游 $(git rev-parse --short upstream/master)"
+          git merge upstream/master --no-edit -m "sync: 同步上游 $(git rev-parse --short upstream/master)" || {
+            # .github/badges/ 是上游自动统计文件，fork 也在跑同样的自动更新导致冲突；直接取上游版本
+            git checkout upstream/master -- .github/badges/
+            git add -A
+            git commit --no-edit
+          }
           git push origin master
 
       - name: 从上游最新代码构建（应用功能补丁）
