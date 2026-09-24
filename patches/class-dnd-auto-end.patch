@@ -1,28 +1,3 @@
-From 36564e8a1c8ee019430447f5c5018ebada08bffd Mon Sep 17 00:00:00 2001
-From: Doubao Agent <agent@doubao.local>
-Date: Mon, 21 Sep 2026 01:18:27 +0800
-Subject: [PATCH] =?UTF-8?q?feat:=20=E4=B8=8A=E8=AF=BE=E5=8B=BF=E6=89=B0?=
- =?UTF-8?q?=E6=94=AF=E6=8C=81=E3=80=8C=E4=B8=8B=E8=AF=BE=E8=87=AA=E5=8A=A8?=
- =?UTF-8?q?=E5=85=B3=E9=97=AD=E3=80=8D=E5=8F=AF=E9=80=89=E9=A1=B9=EF=BC=88?=
- =?UTF-8?q?=E9=BB=98=E8=AE=A4=E4=B8=8D=E8=87=AA=E5=8A=A8=E5=85=B3=E9=97=AD?=
- =?UTF-8?q?=EF=BC=89?=
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-- 新增存储项 class_dnd_auto_end，默认 false
-- 自动开启勿扰/静音保持不变
-- 开启「下课自动关闭」时注册下课闹钟，到点恢复上课前状态
-- 关闭（默认）时下课保持静音/勿扰，不自动恢复
-- 课程提醒页新增「下课自动关闭」开关
----
- .../haooz/chedule/data/CourseRepository.kt    | 14 +++++++++
- .../haooz/chedule/reminder/ClassDndHelper.kt  | 31 ++++++++++++-------
- .../chedule/reminder/ClassDndReceiver.kt      |  9 +++---
- .../ui/activities/CourseReminderScreen.kt     | 15 ++++++++-
- .../chedule/viewmodel/SettingsViewModel.kt    | 12 +++++++
- 5 files changed, 64 insertions(+), 17 deletions(-)
-
 diff --git a/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt b/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt
 index 8396d42..f89e207 100644
 --- a/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt
@@ -56,26 +31,28 @@ index 8396d42..f89e207 100644
       * 占用判断为分钟级时间重叠；自定义时间课按实际起止参与，时间无法确定时回退节次重叠。
       *
 diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-index ac2e003..6f34f35 100644
+index d4e3534..c71e5a3 100644
 --- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 +++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-@@ -1,5 +1,5 @@
- // 0=DND(需勿扰权限) 1=SILENT(仅关铃声振动) 2=PRIORITY(需勿扰权限)。
--// 下课/关开关时恢复开启前快照，不覆盖用户手动改过的设置。
-+// 上课自动开启静音/勿扰；是否在下课自动恢复由用户开关 getClassDndAutoEnd 决定（默认 false，不自动关闭，保持当前系统状态）。
+@@ -1,7 +1,7 @@
+ // 上课勿扰状态机：
+ // - 进入课堂时写入目标状态一次，写入前快照系统原状态
+ // - 课堂期间只观察：用户在课中手动改过就不再强行写回，也不销毁快照
+-// - 下课/离开课堂时校验：系统状态仍等于本应用写入的值才还原快照；否则视为用户已接管，保留现状
++// - 下课/离开课堂时：默认保持静音/勿扰不自动恢复；仅当「下课自动关闭」开关开启才校验还原快照
+ // - 用户在应用内关开关 / 切档位属于明确指令，无条件还原快照后再按新状态处理
+ // - 通知 / 超级岛按钮属于手动接管：课堂外点了立刻生效并保持，进入课堂后转交课堂生命周期
  package com.haooz.chedule.reminder
- 
- import android.app.AlarmManager
-@@ -26,7 +26,7 @@ object ClassDndHelper {
-     private const val KEY_ORIGINAL_RINGER = "dnd_original_ringer_mode"
-     private const val KEY_ORIGINAL_FILTER = "dnd_original_interruption_filter"
+@@ -38,7 +38,7 @@ object ClassDndHelper {
+     // 手动接管的最长保留时间：跨日或超时就无条件还原，避免手机被遗忘在勿扰里
+     private const val MANUAL_HOLD_MAX_MS = 8 * 60 * 60 * 1000L
  
 -    // 与课程提醒闹钟的 10000 段错开
-+    // 与课程提醒闹钟的 10000 段错开；END 段仅在「下课自动关闭」开启时用于注册下课闹钟
++    // 与课程提醒闹钟的 10000 段错开；END 闹钟触发后由 applyCurrentState 按「下课自动关闭」开关决定是否自动恢复
      private const val RC_DND_START_BASE = 30000
      private const val RC_DND_END_BASE = 40000
- 
-@@ -206,20 +206,23 @@ object ClassDndHelper {
+     // 测试课（测试超级岛 / 测试实时活动）专属，不占用课程 id 段
+@@ -379,7 +379,9 @@ object ClassDndHelper {
          return false
      }
  
@@ -84,50 +61,23 @@ index ac2e003..6f34f35 100644
 +    // 课堂内自动开启静音/勿扰（不受 autoEnd 影响）；下课/功能关闭/无权限时，
 +    // 仅当「下课自动关闭」开启才恢复，否则保持当前系统状态。
      fun applyCurrentState(context: Context) {
-+        val autoEnd = CourseRepository(context).getClassDndAutoEnd()
          if (!isFeatureAvailable(context)) {
--            restoreDndIfApplied(context)
-+            if (autoEnd) restoreDndIfApplied(context)
-             return
-         }
+             // 用户在应用内关掉开关，明确要求停止管理
+@@ -389,8 +391,10 @@ object ClassDndHelper {
          if (!isInClass(context)) {
--            restoreDndIfApplied(context)
-+            if (autoEnd) restoreDndIfApplied(context)
+             // 用户从通知 / 超级岛按钮手动开启的：不在课堂也保持，等用户再点一次才还原
+             if (isManualHeld(context)) return
+-            // 下课：系统状态还和本应用设置的一致才还原
+-            handBack(context, requireConsistency = true)
++            // 下课：默认不自动关闭（保持静音/勿扰）；仅当「下课自动关闭」开关开启时才校验还原
++            if (CourseRepository(context).getClassDndAutoEnd()) {
++                handBack(context, requireConsistency = true)
++            }
              return
          }
          val mode = currentMode(context)
-         if ((mode == MODE_DND || mode == MODE_PRIORITY) && !isDndPermissionGranted(context)) {
-             // 没权限时不强行开启，也不静默切到 SILENT
--            restoreDndIfApplied(context)
-+            if (autoEnd) restoreDndIfApplied(context)
-             return
-         }
-         enableDndByApp(context)
-@@ -297,12 +300,16 @@ object ClassDndHelper {
-                 action = ClassDndReceiver.ACTION_CLASS_START,
-                 triggerAt = startMillis
-             )
--            scheduleOne(
--                context, alarmManager,
--                requestCode = RC_DND_END_BASE + course.id.hashCode(),
--                action = ClassDndReceiver.ACTION_CLASS_END,
--                triggerAt = endMillis
--            )
-+            // 仅当开启「下课自动关闭」时才注册下课闹钟：下课后自动恢复上课前的铃声/勿扰状态；
-+            // 关闭该选项时只自动开启、不自动关闭，保持静音/勿扰直到用户手动恢复
-+            if (repository.getClassDndAutoEnd()) {
-+                scheduleOne(
-+                    context, alarmManager,
-+                    requestCode = RC_DND_END_BASE + course.id.hashCode(),
-+                    action = ClassDndReceiver.ACTION_CLASS_END,
-+                    triggerAt = endMillis
-+                )
-+            }
-         }
-     }
- 
 diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
-index 1f65436..83f6a49 100644
+index c3f5cf9..1217021 100644
 --- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
 +++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
 @@ -3,8 +3,8 @@
@@ -151,10 +101,10 @@ index 1f65436..83f6a49 100644
 -        /** 下课：退出勿扰 */
 +        /** 下课：自动恢复响铃/勿扰（仅当「下课自动关闭」autoEnd 开启时注册；关闭时理论上不触发，此处由 applyCurrentState 防御性处理） */
          const val ACTION_CLASS_END = "com.haooz.chedule.ACTION_CLASS_DND_END"
-         /**
-          * 测试通知专用：立即开关系统勿扰，不依赖课表与开关状态。
-@@ -42,6 +42,7 @@ class ClassDndReceiver : BroadcastReceiver() {
-                 ClassDndHelper.toggleDndNowForTest(context)
+     }
+ 
+@@ -33,6 +33,7 @@ class ClassDndReceiver : BroadcastReceiver() {
+                 ClassDndHelper.toggleFromNotification(context)
              }
              ACTION_CLASS_START, ACTION_CLASS_END -> {
 +                // 由 applyCurrentState 按 autoEnd 处理：上课自动开启；下课仅在「下课自动关闭」开启时自动恢复，否则保持当前状态
@@ -162,10 +112,10 @@ index 1f65436..83f6a49 100644
                  ClassDndHelper.applyCurrentState(context)
              }
 diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
-index fe03888..8884636 100644
+index 76153dc..eb713a6 100644
 --- a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
 +++ b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
-@@ -94,6 +94,8 @@ fun CourseReminderScreen(
+@@ -104,6 +104,8 @@ fun CourseReminderScreen(
      val islandNotification by settingsViewModel.islandNotification.collectAsState()
      val classDndEnabled by settingsViewModel.classDndEnabled.collectAsState()
      val classDndMode by settingsViewModel.classDndMode.collectAsState()
@@ -174,7 +124,7 @@ index fe03888..8884636 100644
      val context = androidx.compose.ui.platform.LocalContext.current
      val reminderPrefs = remember { context.getSharedPreferences("course_reminder_prefs", android.content.Context.MODE_PRIVATE) }
      var isIgnoringBattery by remember { mutableStateOf(true) }
-@@ -449,7 +451,7 @@ fun CourseReminderScreen(
+@@ -498,7 +500,7 @@ fun CourseReminderScreen(
                                  summary = if (!dndPermissionGranted) {
                                      "需要先授予勿扰权限才能自动开启勿扰"
                                  } else {
@@ -183,8 +133,8 @@ index fe03888..8884636 100644
                                  },
                                  checked = classDndEnabled,
                                  // 仅受总开关约束：无权限时仍可点开，会跳到授权卡片引导
-@@ -464,6 +466,17 @@ fun CourseReminderScreen(
-                                     CourseReminderHelper.startReminderService(context)
+@@ -516,6 +518,17 @@ fun CourseReminderScreen(
+                                     rlog("reminder_service", "start_after_dnd")
                                  }
                              )
 +                            SwitchPreference(
@@ -236,6 +186,3 @@ index 9b26e82..8dac9e8 100644
 +        repository.setClassDndAutoEnd(enabled)
 +    }
  }
--- 
-2.34.1
-
