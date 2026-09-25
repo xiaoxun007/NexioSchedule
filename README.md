@@ -67,7 +67,7 @@ APK versionCode：{上游versionCode × 100 + n}
 
 - APK 使用 **Android 调试密钥**（debug keystore）签名，可直接侧载安装（无需 root）
 - 签名与上游原版**不同**：在已安装上游原版的设备上安装本 fork 版本，会因签名不一致而**覆盖安装失败**，需先卸载原版（注意备份数据）
-- 每次构建生成的 APK 都位于对应 Release 的资产中，文件名统一为 `NexioSchedule-nightly.apk`
+- 每次构建生成的 APK 命名与上游一致：`Nexio.v{主版本}-gh{n}.apk`（如 `Nexio.v1.5.6-gh5.apk`；上游为 `Nexio.v1.5.5-0921.apk` 风格）
 
 ## 5. 应用内更新检测注意（重要）
 
