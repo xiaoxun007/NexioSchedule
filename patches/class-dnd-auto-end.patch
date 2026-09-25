@@ -1,5 +1,5 @@
 diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-index d4e3534..a7a7e3c 100644
+index d4e3534..f1b1aed 100644
 --- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 +++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 @@ -389,8 +389,7 @@ object ClassDndHelper {
@@ -26,7 +26,7 @@ index d4e3534..a7a7e3c 100644
              else -> "勿扰"
          }
 -        val tail = if (inClass) "，下课自动恢复" else "，再次点击可关闭"
-+        val tail = if (inClass) "，下课后保持勿扰" else "，再次点击可关闭"
++        val tail = if (inClass) "" else "，再次点击可关闭"
          Toast.makeText(context, "已开启$what$tail", Toast.LENGTH_SHORT).show()
      }
  
