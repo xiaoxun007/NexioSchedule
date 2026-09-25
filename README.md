@@ -1,16 +1,84 @@
 <div align="center">
 
-# Nexio课程表
+# Nexio课程表（Fork：xiaoxun007）
 
 一款基于 Jetpack Compose 的 Android 课程表应用，支持自定义课表外观、教务系统导入、多格式课表导入、WebDAV 同步、桌面小组件等功能。
 
-[![Stars](https://img.shields.io/github/stars/HaoZai000/NexioSchedule?style=flat-square&color=yellow)](https://github.com/HaoZai000/NexioSchedule/stargazers)
-[![Downloads](https://img.shields.io/github/downloads/HaoZai000/NexioSchedule/total?style=flat-square&color=orange)](https://github.com/HaoZai000/NexioSchedule/releases)
-[![Latest Release](https://img.shields.io/github/v/release/HaoZai000/NexioSchedule?style=flat-square&color=blue)](https://github.com/HaoZai000/NexioSchedule/releases/latest)
+本仓库是 [HaoZai000/NexioSchedule](https://github.com/HaoZai000/NexioSchedule) 的个人维护分支（fork），为满足个人使用习惯做了针对性修改，并接入**自动同步上游 + 自动构建发布**流水线。
 
-#### 一起交流与讨论：加入 [QQ频道](https://pd.qq.com/s/cfwkl5q9q?b=9) · [加入QQ群【Nexio课程表交流群】](https://qun.qq.com/universal-share/share?ac=1&authKey=WYfwJ8DnrMhTZKqVb3gcvB6DS2vUReemmQ3e5EnjKFLdErKvpfychIOGHbtG7ZJR&busi_data=eyJncm91cENvZGUiOiIxMDAxNTUxNzQxIiwidG9rZW4iOiJTQnFRNjJqUHlic0p5VVcySDBBSTFJazY0TU1udElDZlp6TjlCa3FXcmFKcjM5YUVxL2hFcktSb1FQcUtTWmt5IiwidWluIjoiNDM5MDg5NzAzIn0%3D&data=sPDFjZgIpm44b9AEDzaKAru_3W-z3w_t3XXP-N6O7DKkCSbdSyyZctJlzKDIbabYcLU7Qv8YeCKaJF_4rJYXtA&svctype=4&tempid=h5_group_info)
+[![Stars](https://img.shields.io/github/stars/xiaoxun007/NexioSchedule?style=flat-square&color=yellow)](https://github.com/xiaoxun007/NexioSchedule/stargazers)
+[![Downloads](https://img.shields.io/github/downloads/xiaoxun007/NexioSchedule/total?style=flat-square&color=orange)](https://github.com/xiaoxun007/NexioSchedule/releases)
+[![Latest Release](https://img.shields.io/github/v/release/xiaoxun007/NexioSchedule?style=flat-square&color=blue)](https://github.com/xiaoxun007/NexioSchedule/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/xiaoxun007/NexioSchedule/sync-upstream-build-release.yml?style=flat-square&color=green)](https://github.com/xiaoxun007/NexioSchedule/actions)
 
 </div>
+
+---
+
+# ⚠️ 本 Fork 与上游的差异（详细说明）
+
+## 1. 功能差异：移除了「下课自动恢复」（自动关闭静音/勿扰）
+
+这是本 fork **唯一的代码功能改动**。
+
+| 行为 | 上游原版 | 本 fork |
+|------|----------|---------|
+| 上课 | 自动开启勿扰 / 静音 | 自动开启勿扰 / 静音（相同） |
+| 下课 | **自动恢复**上课前的系统状态 | **保持勿扰 / 静音，不自动恢复** |
+| 恢复方式 | 自动 | 手动：点击通知栏 / 超级岛「上课勿扰」按钮还原 |
+
+**改动内容**（仅 1 个文件，+2 / -8 行）：
+- 删除 `ClassDndHelper.applyCurrentState()` 非课堂分支中的自动恢复调用（`handBack(requireConsistency = true)`），下课后保持当前静音/勿扰状态
+- 不再注册「下课」闹钟（真实课与测试课均只保留上课闹钟），减少无效的闹钟调度
+- **保留**的主动行为：上课自动开启、通知栏/超级岛按钮手动开启与手动还原、在设置中关闭课程提醒总开关时的状态还原
+
+补丁文件位于 `patches/class-dnd-auto-end.patch`，可在干净的上游代码上直接应用。
+
+## 2. 自动同步上游 + 自动构建发布
+
+本 fork 的 `master` 分支由 GitHub Actions 工作流全权管理（`.github/workflows/sync-upstream-build-release.yml`）：
+
+1. **每小时**检查上游 `HaoZai000/NexioSchedule` 是否有新提交
+2. 有更新时自动执行：
+   - 同步上游最新代码（fork `master` 强制对齐上游）
+   - 应用本 fork 的功能补丁（`patches/class-dnd-auto-end.patch`）
+   - R8 优化编译 Release APK（`./gradlew :app:assembleRelease`）
+   - 使用 Android 调试密钥签名（`signing/debug.keystore.b64`），可直接安装
+   - 发布 GitHub Release
+3. 同步过程会保护本 fork 特有文件：`patches/`、`signing/`、`.github/workflows/`、`README.md`，不会被上游覆盖
+
+**已知边界**：若上游发生大版本重构（如重写核心文件），补丁可能无法自动应用，构建会失败并通过 GitHub 邮件通知，届时需要人工重新适配补丁。
+
+## 3. 版本命名规则
+
+Release 版本号与上游主版本对齐，附加构建计数后缀：
+
+```
+v{上游主版本}-gh{n}
+```
+
+- 例：上游版本 `1.5.6-0924` → 本 fork 依次发布 `v1.5.6-gh1`、`v1.5.6-gh2` …
+- 每次上游升版（主版本变化，如 `1.6.0`）后，`gh` 计数从 1 重新开始 → `v1.6.0-gh1`
+
+## 4. 签名与安装说明
+
+- APK 使用 **Android 调试密钥**（debug keystore）签名，可直接侧载安装（无需 root）
+- 签名与上游原版**不同**：在已安装上游原版的设备上安装本 fork 版本，会因签名不一致而**覆盖安装失败**，需先卸载原版（注意备份数据）
+- 每次构建生成的 APK 都位于对应 Release 的资产中，文件名统一为 `NexioSchedule-nightly.apk`
+
+## 5. 应用内更新检测注意（重要）
+
+- 应用内置的更新检测逻辑**仍指向上游仓库**（默认 Gitee `hyper_schedule`，可切换到 GitHub 上游 `HaoZai000/NexioSchedule`）
+- **不会检测本 fork 发布的 Release**
+- 若上游发布了更高版本，应用可能提示更新——**注意辨别来源，避免下载上游原版覆盖本 fork 的定制功能**（上游原版会恢复「下课自动关闭」行为）
+
+## 6. 下载
+
+所有构建产物发布在 [Releases 页面](https://github.com/xiaoxun007/NexioSchedule/releases)，最新的 `v{主版本}-gh{n}` 即为最新构建。
+
+---
+
+# 上游项目简介
 
 ## 功能特性
 
@@ -73,90 +141,8 @@
 |----------|----------|----------|
 | ![教务导入](docs/picture/教务导入.png) | ![课程提醒](docs/picture/课程提醒.png) | ![桌面小部件](docs/picture/桌面小部件.png) |
 
-## 项目结构
+---
 
-```
-app/src/main/java/com/haooz/chedule/
-├── ui/
-│   ├── activities/            // 各功能页面（Activity / Compose Screen）
-│   │   ├── MainActivity.kt              // 主页面 - 应用入口
-│   │   ├── SwitchScheduleActivity.kt    // 切换课程表
-│   │   ├── EducationalImportActivity.kt // 教务系统导入
-│   │   ├── CourseManageScreen.kt        // 课程管理
-│   │   ├── CourseTimeSettingsScreen.kt  // 课程时间设置
-│   │   ├── CourseReminderScreen.kt      // 课程提醒设置
-│   │   ├── WebDavSettingsScreen.kt      // WebDAV 同步设置
-│   │   ├── PreferenceSettingsScreen.kt  // 偏好设置
-│   │   ├── AiImportScreen.kt            // AI 文本导入
-│   │   ├── BackupAndMigrationScreen.kt  // 备份与迁移
-│   │   ├── LocalBackupScreen.kt         // 本地备份
-│   │   ├── ChangelogScreen.kt           // 更新日志
-│   │   ├── UpdateSettingsScreen.kt      // 应用更新设置
-│   │   ├── AboutActivity.kt             // 关于页面
-│   │   ├── AppreciateAuthorScreen.kt    // 赞赏作者
-│   │   └── WidgetIntroScreen.kt         // 小组件介绍
-│   ├── screens/               // 核心 Compose 页面
-│   │   ├── MainScheduleScreen.kt        // 周课表主界面
-│   │   ├── TodayScreen.kt               // 今日课程
-│   │   ├── TodayAssistant.kt            // 今日助手
-│   │   ├── ShiftScheduleScreen.kt       // 排班课表
-│   │   ├── CourseDetailScreen.kt        // 课程详情
-│   │   ├── AddCourseDialog.kt           // 添加课程
-│   │   ├── AddEditCourseBottomSheet.kt  // 添加/编辑课程 BottomSheet
-│   │   ├── CourseEditScreen.kt          // 课程编辑
-│   │   ├── CustomizeScheduleScreen.kt   // 课表外观自定义
-│   │   ├── SchoolSelectionScreen.kt     // 学校选择
-│   │   ├── TimeConfigEditScreen.kt      // 时间配置编辑
-│   │   ├── SettingsScreen.kt            // 设置页
-│   │   └── WebViewScreen.kt             // WebView 兼容
-│   ├── components/           // 通用组件（TopBar / BottomBar / CourseCard / DayColumn / LiquidAddButton 等）
-│   ├── basic/                 // 基础组件（渐隐顶栏 / 液态玻璃下拉菜单 / Overlay 弹窗 等）
-│   ├── theme/                 // 主题（Color / Type / Theme）
-│   ├── effects/               // 动效
-│   │   ├── liquidglass/       // 液态玻璃
-│   │   ├── miuix/             // MiUiX 特效
-│   │   ├── edgelight/         // 边缘光效
-│   │   └── background/        // HyperOS 背景特效
-│   ├── web/                   // WebView 兼容与 JS 桥接
-│   ├── data/                  // UI 层数据（更新日志 / 赞赏数据）
-│   └── utils/                 // 工具（更新检查 / 主题工具 / 边缘滚动 等）
-├── data/                      // 数据层
-│   ├── Course.kt / TimeConfig.kt / Combination.kt / AppearanceConfig.kt
-│   ├── CourseRepository.kt    // 课程数据仓库
-│   ├── WebDavManager.kt       // WebDAV 同步管理
-│   ├── SyncManager.kt         // 同步管理器
-│   ├── StatsReporter.kt       // 统计上报
-│   └── school/                // 教务系统适配（学校 / 脚本仓库）
-├── viewmodel/                 // 状态管理
-│   ├── CourseViewModel.kt     // 课程 ViewModel
-│   ├── ScheduleViewModel.kt   // 多课表管理 ViewModel
-│   ├── ShiftViewModel.kt      // 排班 ViewModel
-│   └── SettingsViewModel.kt   // 设置 ViewModel
-├── reminder/                  // 课程提醒（闹钟 / 通知 / 岛区跳转 / 组件事件接收器）
-├── widget/                    // 桌面小组件（课程预览 / 今日课程，含 4x7 与标准尺寸）
-├── shizuku/                   // Shizuku 特权服务
-```
+## 致谢上游
 
-## 技术栈
-
-- **语言**: Kotlin
-- **UI 框架**: Jetpack Compose + Material3
-- **UI 组件**: [MiUiX](https://github.com/compose-miuix-ui/miuix)
-- **圆角形状**: [Kyant Shapes](https://github.com/Kyant0/kyant-shapes)
-- **数据存储**: SharedPreferences + Gson
-- **网络同步**: WebDAV
-- **脚本引擎**: Rhino (JavaScript)
-- **最低支持**: Android 12 (API 31)
-
-## 特别致谢
-
-| 项目 | 作者 |
-|------|------|
-| [Miuix](https://github.com/compose-miuix-ui/miuix) | Yukonga |
-| [Capsule](https://github.com/Kyant0/Capsule) | Kyant0 |
-| [OkHttp](https://github.com/square/okhttp) | Square |
-| [warehouse](https://github.com/XingHeYuZhuan/shiguang_warehouse) | XingHeYuZhuan |
-| [Shizuku](https://github.com/RikkaApps/Shizuku) | RikkaApps |
-| [Backdrop](https://github.com/Kyant0/AndroidLiquidGlass) | Kyant0 |
-
-
+本 fork 基于 [HaoZai000/NexioSchedule](https://github.com/HaoZai000/NexioSchedule) 维护，感谢原作者与上游贡献者。
