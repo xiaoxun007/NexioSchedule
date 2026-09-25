@@ -51,10 +51,11 @@ jobs:
       - name: 同步 fork 代码到上游最新
         if: steps.check.outputs.has_update == 'true'
         run: |
-          # 先保存 fork 特有文件（补丁/签名/本 workflow），reset 对齐上游后再恢复
+          # 先保存 fork 特有文件（补丁/签名/本 workflow/README），reset 对齐上游后再恢复
           mkdir -p /tmp/keep
           cp -r patches signing /tmp/keep/ 2>/dev/null || true
           cp .github/workflows/sync-upstream-build-release.yml /tmp/keep/ 2>/dev/null || true
+          cp README.md /tmp/keep/ 2>/dev/null || true
           # fork master 完全对齐上游（force reset），避免 merge 冲突（上游会增删 badges 等自动文件）
           git reset --hard upstream/master
           # 恢复 fork 特有文件并提交
@@ -62,6 +63,7 @@ jobs:
           cp -r /tmp/keep/patches/* patches/ 2>/dev/null || true
           cp -r /tmp/keep/signing/* signing/ 2>/dev/null || true
           cp /tmp/keep/sync-upstream-build-release.yml .github/workflows/ 2>/dev/null || true
+          cp /tmp/keep/README.md ./README.md 2>/dev/null || true
           git add -A
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "sync: 对齐上游 $(git rev-parse --short upstream/master) 并保留补丁/签名" --no-verify || true
