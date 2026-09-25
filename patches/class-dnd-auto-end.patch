@@ -67,3 +67,61 @@ index 76153dc..c566289 100644
                                  },
                                  checked = classDndEnabled,
                                  // 仅受总开关约束：无权限时仍可点开，会跳到授权卡片引导
+diff --git a/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt b/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
+index 4ebc523..2368a17 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
+@@ -1,6 +1,8 @@
+ package com.haooz.chedule.ui.components
+ 
+ import android.content.Context
++import android.content.Intent
++import android.net.Uri
+ import android.util.Log
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+@@ -48,7 +50,8 @@ import kotlin.time.Duration.Companion.milliseconds
+ 
+ /**
+  * 更新弹窗：每天启动时检查一次更新，有新版本则弹窗提示。
+- * 点「更新」直接下载安装包（已下好则直接安装），不再跳转设置页再点一次。
++ * 本 fork：点「更新」跳转到 fork 仓库 Releases 页下载定制版 APK，
++ * 不内嵌下载/安装（避免误装上游原版覆盖「下课不自动恢复」的定制功能）。
+  */
+ @Composable
+ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = null) {
+@@ -186,7 +189,7 @@ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = nu
+         isInstalling -> "安装中"
+         isDownloading -> "正在下载"
+         downloadComplete || hasDownloadedApk -> "安装"
+-        else -> "更新"
++        else -> "去下载"
+     }
+ 
+     OverlayDialog(
+@@ -257,16 +260,16 @@ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = nu
+                     enabled = !isDownloading && !isInstalling,
+                     onClick = {
+                         hapticFeedback.performHapticFeedback(HapticFeedbackType.Confirm)
+-                        when {
+-                            isDownloading || isInstalling -> Unit
+-                            downloadComplete || hasDownloadedApk -> {
+-                                if (downloadedFile == null && updateTagName.isNotBlank()) {
+-                                    downloadedFile = UpdateInstaller.apkFile(context, updateTagName)
+-                                }
+-                                startInstall()
+-                            }
+-                            else -> startDownload()
++                        if (isDownloading || isInstalling) return@Button
++                        // 本 fork：跳转到 fork 仓库 Releases 页下载定制版
++                        try {
++                            context.startActivity(
++                                Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/xiaoxun007/NexioSchedule/releases"))
++                            )
++                        } catch (e: Exception) {
++                            android.widget.Toast.makeText(context, "无法打开浏览器: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                         }
++                        showUpdateDialog = false
+                     },
+                     colors = ButtonDefaults.buttonColorsPrimary()
+                 ) {
