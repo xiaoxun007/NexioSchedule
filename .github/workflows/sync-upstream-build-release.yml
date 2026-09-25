@@ -129,10 +129,12 @@ jobs:
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           BT="$SDK_ROOT/build-tools/37.0.0"
           mkdir -p app/build/outputs/final
+          # APK 命名与上游风格一致：Nexio.v{版本}.apk（如上游 Nexio.v1.5.5-0921.apk）；fork 版本为 Nexio.v{主版本}-gh{n}.apk
+          APK_NAME="Nexio.v${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}.apk"
           "$BT/zipalign" -f 4 app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/final/aligned.apk
           "$BT/apksigner" sign --ks signing/debug.keystore --ks-pass pass:android \
-            --out app/build/outputs/final/NexioSchedule-nightly.apk app/build/outputs/final/aligned.apk
-          "$BT/apksigner" verify app/build/outputs/final/NexioSchedule-nightly.apk
+            --out "app/build/outputs/final/${APK_NAME}" app/build/outputs/final/aligned.apk
+          "$BT/apksigner" verify "app/build/outputs/final/${APK_NAME}"
           ls -lh app/build/outputs/final/
 
       - name: 上传 APK 构建产物
