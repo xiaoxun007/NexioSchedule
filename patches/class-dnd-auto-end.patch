@@ -54,6 +54,30 @@ index d4e3534..f1b1aed 100644
          }
          writeRcSet(context, rcs)
      }
+diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt b/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
+index 176e7a9..dc33d83 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
+@@ -486,6 +486,19 @@ fun AboutScreen(
+                                         }
+                                     )
+                                 }
++                                if (!embedded) {
++                                    Text(
++                                        text = "本版本为个人 fork：上课自动开启勿扰，下课后保持勿扰不自动恢复；更新请到 xiaoxun007/NexioSchedule 的 Releases 下载。",
++                                        fontSize = 13.sp,
++                                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
++                                        modifier = Modifier.padding(
++                                            start = 20.dp,
++                                            end = 18.dp,
++                                            top = 12.dp,
++                                            bottom = 16.dp
++                                        )
++                                    )
++                                }
+                             }
+                         }
+                     }
 diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
 index 76153dc..c566289 100644
 --- a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
