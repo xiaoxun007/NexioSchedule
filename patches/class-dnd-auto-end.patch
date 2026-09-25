@@ -1,188 +1,38 @@
-diff --git a/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt b/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt
-index 8396d42..f89e207 100644
---- a/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt
-+++ b/app/src/main/java/com/haooz/chedule/data/CourseRepository.kt
-@@ -210,6 +210,8 @@ class CourseRepository private constructor(context: Context) {
-         private const val KEY_CLASS_DND = "class_dnd_enabled"
-         /** 上课时启用的系统勿扰档位：0=勿扰模式 (DND, NONE)，1=静音模式 (SILENT, PRIORITY，闹钟仍响) */
-         private const val KEY_CLASS_DND_MODE = "class_dnd_mode"
-+        /** 下课是否自动恢复上课前的响铃/勿扰状态；默认 false（不自动关闭，保持当前系统状态） */
-+        private const val KEY_CLASS_DND_AUTO_END = "class_dnd_auto_end"
-         private const val KEY_SHIFT_MODE = "shift_mode_enabled"
-         private const val KEY_SHIFT_SELECTED_SCHEDULES = "shift_selected_schedules"
-         private const val KEY_DEFAULT_HOMEPAGE = "default_homepage"
-@@ -1065,6 +1067,18 @@ class CourseRepository private constructor(context: Context) {
-         prefs.edit { putInt(KEY_CLASS_DND_MODE, mode) }
-     }
- 
-+    /**
-+     * 「下课自动关闭」：开启后下课时自动恢复上课前的响铃/勿扰状态；
-+     * 关闭（默认）则下课保持当前系统状态，需用户手动调整。
-+     */
-+    fun getClassDndAutoEnd(): Boolean {
-+        return prefs.getBoolean(KEY_CLASS_DND_AUTO_END, false)
-+    }
-+
-+    fun setClassDndAutoEnd(enabled: Boolean) {
-+        prefs.edit { putBoolean(KEY_CLASS_DND_AUTO_END, enabled) }
-+    }
-+
-     /**
-      * 占用判断为分钟级时间重叠；自定义时间课按实际起止参与，时间无法确定时回退节次重叠。
-      *
 diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-index d4e3534..c71e5a3 100644
+index d4e3534..15e486b 100644
 --- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 +++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-@@ -1,7 +1,7 @@
- // 上课勿扰状态机：
- // - 进入课堂时写入目标状态一次，写入前快照系统原状态
- // - 课堂期间只观察：用户在课中手动改过就不再强行写回，也不销毁快照
--// - 下课/离开课堂时校验：系统状态仍等于本应用写入的值才还原快照；否则视为用户已接管，保留现状
-+// - 下课/离开课堂时：默认保持静音/勿扰不自动恢复；仅当「下课自动关闭」开关开启才校验还原快照
- // - 用户在应用内关开关 / 切档位属于明确指令，无条件还原快照后再按新状态处理
- // - 通知 / 超级岛按钮属于手动接管：课堂外点了立刻生效并保持，进入课堂后转交课堂生命周期
- package com.haooz.chedule.reminder
-@@ -38,7 +38,7 @@ object ClassDndHelper {
-     // 手动接管的最长保留时间：跨日或超时就无条件还原，避免手机被遗忘在勿扰里
-     private const val MANUAL_HOLD_MAX_MS = 8 * 60 * 60 * 1000L
- 
--    // 与课程提醒闹钟的 10000 段错开
-+    // 与课程提醒闹钟的 10000 段错开；END 闹钟触发后由 applyCurrentState 按「下课自动关闭」开关决定是否自动恢复
-     private const val RC_DND_START_BASE = 30000
-     private const val RC_DND_END_BASE = 40000
-     // 测试课（测试超级岛 / 测试实时活动）专属，不占用课程 id 段
-@@ -379,7 +379,9 @@ object ClassDndHelper {
-         return false
-     }
- 
--    // 闹钟/每分钟刷新/通知按钮共同调用，幂等
-+    // 闹钟/每分钟刷新/通知按钮共同调用，幂等。
-+    // 课堂内自动开启静音/勿扰（不受 autoEnd 影响）；下课/功能关闭/无权限时，
-+    // 仅当「下课自动关闭」开启才恢复，否则保持当前系统状态。
-     fun applyCurrentState(context: Context) {
-         if (!isFeatureAvailable(context)) {
-             // 用户在应用内关掉开关，明确要求停止管理
-@@ -389,8 +391,10 @@ object ClassDndHelper {
+@@ -389,8 +389,7 @@ object ClassDndHelper {
          if (!isInClass(context)) {
              // 用户从通知 / 超级岛按钮手动开启的：不在课堂也保持，等用户再点一次才还原
              if (isManualHeld(context)) return
 -            // 下课：系统状态还和本应用设置的一致才还原
 -            handBack(context, requireConsistency = true)
-+            // 下课：默认不自动关闭（保持静音/勿扰）；仅当「下课自动关闭」开关开启时才校验还原
-+            if (CourseRepository(context).getClassDndAutoEnd()) {
-+                handBack(context, requireConsistency = true)
-+            }
++            // 下课：不自动恢复，保持静音/勿扰；用户可手动从通知 / 超级岛按钮还原
              return
          }
          val mode = currentMode(context)
-diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
-index c3f5cf9..1217021 100644
---- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
-+++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndReceiver.kt
-@@ -3,8 +3,8 @@
-  *
-  * 三类来源：
-  * - [ACTION_TOGGLE]：实况通知 / 超级岛「上课勿扰」按钮
-- * - [ACTION_CLASS_START]：上课时间点的精确闹钟
-- * - [ACTION_CLASS_END]：下课时间点的精确闹钟
-+ * - [ACTION_CLASS_START]：上课时间点的精确闹钟（仅自动开启）
-+ * - [ACTION_CLASS_END]：下课时间点的精确闹钟（仅当「下课自动关闭」autoEnd 开启时注册；由 applyCurrentState 按开关决定是否自动恢复）
-  */
- package com.haooz.chedule.reminder
+@@ -503,20 +502,15 @@ object ClassDndHelper {
+             val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
  
-@@ -20,9 +20,9 @@ class ClassDndReceiver : BroadcastReceiver() {
+             val startRc = RC_DND_START_BASE + course.id.hashCode()
+-            val endRc = RC_DND_END_BASE + course.id.hashCode()
+             scheduleOne(context, alarmManager, startRc, ClassDndReceiver.ACTION_CLASS_START, startMillis)
+-            scheduleOne(context, alarmManager, endRc, ClassDndReceiver.ACTION_CLASS_END, endMillis)
+             rcs += startRc
+-            rcs += endRc
+         }
  
-         /** 通知按钮：切换「上课自动开启勿扰」 */
-         const val ACTION_TOGGLE = "com.haooz.chedule.ACTION_CLASS_DND_TOGGLE"
--        /** 上课：进入勿扰 */
-+        /** 上课：自动开启勿扰 */
-         const val ACTION_CLASS_START = "com.haooz.chedule.ACTION_CLASS_DND_START"
--        /** 下课：退出勿扰 */
-+        /** 下课：自动恢复响铃/勿扰（仅当「下课自动关闭」autoEnd 开启时注册；关闭时理论上不触发，此处由 applyCurrentState 防御性处理） */
-         const val ACTION_CLASS_END = "com.haooz.chedule.ACTION_CLASS_DND_END"
+-        // 测试课同样注册上课/下课闹钟：课前 70 秒、课中 120 秒的窗口
+-        // 靠每分钟对账粒度太粗，必须走精确闹钟才能准时开、准时关
+-        testClassWindow(context)?.let { (start, end) ->
++        // 测试课同样注册上课闹钟：课前 70 秒、课中 120 秒的窗口
++        // 靠每分钟对账粒度太粗，必须走精确闹钟才能准时开（下课不自动恢复，无需下课闹钟）
++        testClassWindow(context)?.let { (start, _) ->
+             scheduleOne(context, alarmManager, RC_DND_TEST_START, ClassDndReceiver.ACTION_CLASS_START, start)
+-            scheduleOne(context, alarmManager, RC_DND_TEST_END, ClassDndReceiver.ACTION_CLASS_END, end)
+             rcs += RC_DND_TEST_START
+-            rcs += RC_DND_TEST_END
+         }
+         writeRcSet(context, rcs)
      }
- 
-@@ -33,6 +33,7 @@ class ClassDndReceiver : BroadcastReceiver() {
-                 ClassDndHelper.toggleFromNotification(context)
-             }
-             ACTION_CLASS_START, ACTION_CLASS_END -> {
-+                // 由 applyCurrentState 按 autoEnd 处理：上课自动开启；下课仅在「下课自动关闭」开启时自动恢复，否则保持当前状态
-                 Log.d(TAG, "Class ${if (intent.action == ACTION_CLASS_START) "start" else "end"} alarm, syncing DND state")
-                 ClassDndHelper.applyCurrentState(context)
-             }
-diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
-index 76153dc..eb713a6 100644
---- a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
-+++ b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
-@@ -104,6 +104,8 @@ fun CourseReminderScreen(
-     val islandNotification by settingsViewModel.islandNotification.collectAsState()
-     val classDndEnabled by settingsViewModel.classDndEnabled.collectAsState()
-     val classDndMode by settingsViewModel.classDndMode.collectAsState()
-+    // 下课后是否自动恢复上课前的响铃/勿扰状态；默认关闭（不自动关闭）
-+    val classDndAutoEnd by settingsViewModel.classDndAutoEnd.collectAsState()
-     val context = androidx.compose.ui.platform.LocalContext.current
-     val reminderPrefs = remember { context.getSharedPreferences("course_reminder_prefs", android.content.Context.MODE_PRIVATE) }
-     var isIgnoringBattery by remember { mutableStateOf(true) }
-@@ -498,7 +500,7 @@ fun CourseReminderScreen(
-                                 summary = if (!dndPermissionGranted) {
-                                     "需要先授予勿扰权限才能自动开启勿扰"
-                                 } else {
--                                    "上课时自动开启勿扰，下课后自动恢复"
-+                                    "上课时自动开启勿扰/静音"
-                                 },
-                                 checked = classDndEnabled,
-                                 // 仅受总开关约束：无权限时仍可点开，会跳到授权卡片引导
-@@ -516,6 +518,17 @@ fun CourseReminderScreen(
-                                     rlog("reminder_service", "start_after_dnd")
-                                 }
-                             )
-+                            SwitchPreference(
-+                                title = "下课自动关闭",
-+                                summary = "开启后下课时自动恢复上课前的响铃/勿扰状态；关闭则保持当前状态，需手动调整",
-+                                checked = classDndAutoEnd,
-+                                enabled = masterEnabled,
-+                                onCheckedChange = { autoEnd ->
-+                                    settingsViewModel.setClassDndAutoEnd(autoEnd)
-+                                    // 重排闹钟：开启才注册下课闹钟，关闭则取消已注册的下课闹钟
-+                                    CourseReminderHelper.startReminderService(context)
-+                                }
-+                            )
-                             // 总开关开启时档位始终可见：通知/超级岛上的「上课勿扰」按钮也能切换勿扰开关
-                             // 总开关关闭时整页子项折叠，档位一并隐藏
-                             val selectMode: (Int) -> Unit = { mode ->
-diff --git a/app/src/main/java/com/haooz/chedule/viewmodel/SettingsViewModel.kt b/app/src/main/java/com/haooz/chedule/viewmodel/SettingsViewModel.kt
-index 9b26e82..8dac9e8 100644
---- a/app/src/main/java/com/haooz/chedule/viewmodel/SettingsViewModel.kt
-+++ b/app/src/main/java/com/haooz/chedule/viewmodel/SettingsViewModel.kt
-@@ -96,6 +96,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
-     private val _classDndMode = MutableStateFlow(repository.getClassDndMode())
-     val classDndMode: StateFlow<Int> = _classDndMode.asStateFlow()
- 
-+    // 下课是否自动恢复响铃/勿扰；默认 false（不自动关闭）
-+    private val _classDndAutoEnd = MutableStateFlow(repository.getClassDndAutoEnd())
-+    val classDndAutoEnd: StateFlow<Boolean> = _classDndAutoEnd.asStateFlow()
-+
-     private val _defaultHomepage = MutableStateFlow(repository.getDefaultHomepage())
-     val defaultHomepage: StateFlow<String> = _defaultHomepage.asStateFlow()
- 
-@@ -187,6 +191,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
-         val newClassDndMode = repository.getClassDndMode()
-         if (_classDndMode.value != newClassDndMode) _classDndMode.value = newClassDndMode
- 
-+        val newClassDndAutoEnd = repository.getClassDndAutoEnd()
-+        if (_classDndAutoEnd.value != newClassDndAutoEnd) _classDndAutoEnd.value = newClassDndAutoEnd
-+
-         val newTodayShowWallpaper = repository.getTodayShowWallpaper()
-         if (_todayShowWallpaper.value != newTodayShowWallpaper) _todayShowWallpaper.value = newTodayShowWallpaper
- 
-@@ -314,4 +321,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
-         _classDndMode.value = mode
-         repository.setClassDndMode(mode)
-     }
-+
-+    fun setClassDndAutoEnd(enabled: Boolean) {
-+        _classDndAutoEnd.value = enabled
-+        repository.setClassDndAutoEnd(enabled)
-+    }
- }
