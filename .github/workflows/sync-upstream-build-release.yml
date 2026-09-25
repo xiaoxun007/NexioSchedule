@@ -95,10 +95,29 @@ jobs:
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
 
-      - name: 构建 Release APK（R8 优化）
+      - name: 构建 Release APK（R8 优化，fork 版本号）
+        id: build
         if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           chmod +x gradlew
+          # fork 版本号：versionName 跟随上游主版本加 -gh{n} 后缀，versionCode 同步递增（上游code*100+gh），
+          # 保证「改了版本名称必然同步改版本代码」：fork 间单调递增可覆盖安装，且永不与上游 versionCode 冲突
+          VNAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          MAINVER=$(echo "$VNAME" | sed 's/-.*//')
+          VC=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
+          GH_N=$((GH_COUNT + 1))
+          FORK_CODE=$((VC * 100 + GH_N))
+          sed -i "s/versionName = \"[^\"]*\"/versionName = \"${MAINVER}-gh${GH_N}\"/" app/build.gradle.kts
+          sed -i "s/versionCode = [0-9]*/versionCode = ${FORK_CODE}/" app/build.gradle.kts
+          echo "VNAME=$VNAME" >> "$GITHUB_OUTPUT"
+          echo "MAINVER=$MAINVER" >> "$GITHUB_OUTPUT"
+          echo "GH_N=$GH_N" >> "$GITHUB_OUTPUT"
+          echo "VC=$VC" >> "$GITHUB_OUTPUT"
+          echo "FORK_CODE=$FORK_CODE" >> "$GITHUB_OUTPUT"
+          echo "构建 fork 版本: ${MAINVER}-gh${GH_N} (versionCode=${FORK_CODE})"
           ./gradlew :app:assembleRelease --no-daemon
 
       - name: 签名 APK（测试调试密钥）
@@ -128,13 +147,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # tag 跟随上游主版本 + 构建计数：v{上游主版本}-gh{n}，每次上游升版后 gh 从 1 重新计数
-          VNAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
-          MAINVER=$(echo "$VNAME" | sed 's/-.*//')
-          GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
-          TAG="v${MAINVER}-gh$((GH_COUNT + 1))"
+          # tag 跟随上游主版本 + 构建计数：v{上游主版本}-gh{n}，每次上游升版后 gh 从 1 重新计数（与 APK 内 versionName/versionCode 一致）
+          TAG="v${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}"
           UPSTREAM=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
           gh release create "$TAG" app/build/outputs/final/*.apk \
             --repo xiaoxun007/NexioSchedule \
             --title "$TAG" \
-            --notes "基于上游 \`$UPSTREAM\`（上游版本号 \`$VNAME\`）+ 「上课勿扰（下课不自动恢复）」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
+            --notes "基于上游 \`$UPSTREAM\` + 「上课勿扰（下课不自动恢复）」补丁构建；fork 版本 \`$TAG\`（versionName \`${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}\` / versionCode \`${{ steps.build.outputs.FORK_CODE }}\`），调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
