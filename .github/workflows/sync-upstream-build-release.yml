@@ -142,7 +142,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NexioSchedule-release-apk
-          path: app/build/outputs/final/*.apk
+          # 仅上传最终签名 APK（排除 aligned.apk 中间产物）
+          path: app/build/outputs/final/Nexio.v*.apk
 
       - name: 发布 GitHub Release
         if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
@@ -186,7 +187,7 @@ jobs:
           - 同一 fork 系列（\`-gh\`）可**直接覆盖升级**（versionCode 单调递增）
           - 应用内若提示"有新版本"，请到本 fork Releases 下载对应 \`-gh\` 版本，勿点上游原版（会恢复「下课自动关闭」行为）
           MDEOF
-          gh release create "$TAG" app/build/outputs/final/*.apk \
+          gh release create "$TAG" app/build/outputs/final/Nexio.v*.apk \
             --repo xiaoxun007/NexioSchedule \
             --title "$TAG" \
             --notes-file /tmp/release_notes.md || echo "Release 已存在或创建失败（忽略）"
