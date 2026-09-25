@@ -126,11 +126,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # tag 与上游版本号对齐：v{上游versionName}-nightly-{构建时间}
+          # tag 跟随上游主版本 + 构建计数：v{上游主版本}-gh{n}，每次上游升版后 gh 从 1 重新计数
           VNAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
-          TAG="v${VNAME}-nightly-$(date +%Y%m%d-%H%M)"
+          MAINVER=$(echo "$VNAME" | sed 's/-.*//')
+          GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
+          TAG="v${MAINVER}-gh$((GH_COUNT + 1))"
           UPSTREAM=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
           gh release create "$TAG" app/build/outputs/final/*.apk \
             --repo xiaoxun007/NexioSchedule \
             --title "$TAG" \
-            --notes "基于上游 \`$UPSTREAM\`（上游版本号 \`$VNAME\`）+ 「上课勿扰·下课自动关闭可选」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
+            --notes "基于上游 \`$UPSTREAM\`（上游版本号 \`$VNAME\`）+ 「上课勿扰（下课不自动恢复）」补丁构建，调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
