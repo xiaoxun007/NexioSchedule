@@ -1,5 +1,5 @@
 diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-index d4e3534..15e486b 100644
+index d4e3534..a7a7e3c 100644
 --- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 +++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 @@ -389,8 +389,7 @@ object ClassDndHelper {
@@ -12,6 +12,24 @@ index d4e3534..15e486b 100644
              return
          }
          val mode = currentMode(context)
+@@ -464,7 +463,7 @@ object ClassDndHelper {
+             Toast.makeText(context, "开启失败，请检查勿扰权限", Toast.LENGTH_SHORT).show()
+             return
+         }
+-        // 课堂内交给课堂生命周期（下课自动恢复）；课堂外保持到用户再点一次
++        // 课堂内交给课堂生命周期（下课后保持勿扰）；课堂外保持到用户再点一次
+         markManual(context, !inClass)
+ 
+         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+@@ -475,7 +474,7 @@ object ClassDndHelper {
+             MODE_PRIORITY -> "勿扰模式"
+             else -> "勿扰"
+         }
+-        val tail = if (inClass) "，下课自动恢复" else "，再次点击可关闭"
++        val tail = if (inClass) "，下课后保持勿扰" else "，再次点击可关闭"
+         Toast.makeText(context, "已开启$what$tail", Toast.LENGTH_SHORT).show()
+     }
+ 
 @@ -503,20 +502,15 @@ object ClassDndHelper {
              val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
  
@@ -36,3 +54,16 @@ index d4e3534..15e486b 100644
          }
          writeRcSet(context, rcs)
      }
+diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
+index 76153dc..c566289 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
+@@ -498,7 +498,7 @@ fun CourseReminderScreen(
+                                 summary = if (!dndPermissionGranted) {
+                                     "需要先授予勿扰权限才能自动开启勿扰"
+                                 } else {
+-                                    "上课时自动开启勿扰，下课后自动恢复"
++                                    "上课时自动开启勿扰，下课后保持勿扰（可点通知/超级岛按钮手动关闭）"
+                                 },
+                                 checked = classDndEnabled,
+                                 // 仅受总开关约束：无权限时仍可点开，会跳到授权卡片引导
