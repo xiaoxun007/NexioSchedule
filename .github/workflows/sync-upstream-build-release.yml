@@ -149,8 +149,42 @@ jobs:
         run: |
           # tag 跟随上游主版本 + 构建计数：v{上游主版本}-gh{n}，每次上游升版后 gh 从 1 重新计数（与 APK 内 versionName/versionCode 一致）
           TAG="v${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}"
-          UPSTREAM=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
+          UPSTREAM_FULL=$(git rev-parse upstream/master 2>/dev/null || echo "manual")
+          UPSTREAM_VER="${{ steps.build.outputs.VNAME }}"
+          FORK_VER="${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}"
+          FORK_CODE="${{ steps.build.outputs.FORK_CODE }}"
+          # 上游最近变更（取最近 10 个非 merge 提交标题，用于 Release notes）
+          UPSTREAM_LOG=$(git log upstream/master --oneline --no-merges -10 2>/dev/null | sed 's/^/- /')
+          if [ -z "$UPSTREAM_LOG" ]; then UPSTREAM_LOG="- （无法获取上游变更记录）"; fi
+          # 生成详细 Release notes（markdown；HaoZai000/NexioSchedule@sha 会被 GitHub 自动渲染为可点击引用）
+          cat > /tmp/release_notes.md << MDEOF
+          ### 📦 构建信息
+          - **上游基准**：HaoZai000/NexioSchedule@${UPSTREAM_SHORT}（上游 versionName \`${UPSTREAM_VER}\`）
+          - **fork 版本**：\`${TAG}\`（versionName \`${FORK_VER}\` / versionCode \`${FORK_CODE}\`）
+          - **签名**：Android 调试密钥（可直接侧载安装）
+          
+          ### 🔄 上游最近变更（本次同步包含的内容）
+          ${UPSTREAM_LOG}
+          
+          ### 🧩 本 fork 相对上游的定制
+          1. **移除「下课自动恢复」（自动关闭静音/勿扰）**
+             - 下课后保持静音/勿扰，不再自动恢复；需要关闭请点通知栏 / 超级岛按钮手动还原
+             - 不再注册下课闹钟（真实课与测试课仅保留上课闹钟）
+             - 改动：\`app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt\`
+          2. **界面说明文案与行为一致**
+             - 设置页「自动开启勿扰」说明、按钮 Toast 均已改为「下课后保持勿扰」
+             - 改动：\`CourseReminderScreen.kt\`
+          3. **应用内更新按钮跳转本 fork**
+             - 检测到更新后点「去下载」直接打开 [本 fork Releases 页](https://github.com/xiaoxun007/NexioSchedule/releases)，不再内嵌下载上游原版
+             - 改动：\`UpdateDialog.kt\`
+          
+          ### ⚠️ 安装注意
+          - 本 fork APK 签名与上游原版不同：若设备当前安装的是**上游原版**，需先卸载再安装本版本（注意备份数据）
+          - 同一 fork 系列（\`-gh\`）可**直接覆盖升级**（versionCode 单调递增）
+          - 应用内若提示"有新版本"，请到本 fork Releases 下载对应 \`-gh\` 版本，勿点上游原版（会恢复「下课自动关闭」行为）
+          MDEOF
           gh release create "$TAG" app/build/outputs/final/*.apk \
             --repo xiaoxun007/NexioSchedule \
             --title "$TAG" \
-            --notes "基于上游 \`$UPSTREAM\` + 「上课勿扰（下课不自动恢复）」补丁构建；fork 版本 \`$TAG\`（versionName \`${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}\` / versionCode \`${{ steps.build.outputs.FORK_CODE }}\`），调试密钥签名，可直接安装。" || echo "Release 已存在或创建失败（忽略）"
+            --notes-file /tmp/release_notes.md || echo "Release 已存在或创建失败（忽略）"
