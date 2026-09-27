@@ -1,0 +1,151 @@
+diff --git a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+index d4e3534..f1b1aed 100644
+--- a/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
++++ b/app/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+@@ -389,8 +389,7 @@ object ClassDndHelper {
+         if (!isInClass(context)) {
+             // 用户从通知 / 超级岛按钮手动开启的：不在课堂也保持，等用户再点一次才还原
+             if (isManualHeld(context)) return
+-            // 下课：系统状态还和本应用设置的一致才还原
+-            handBack(context, requireConsistency = true)
++            // 下课：不自动恢复，保持静音/勿扰；用户可手动从通知 / 超级岛按钮还原
+             return
+         }
+         val mode = currentMode(context)
+@@ -464,7 +463,7 @@ object ClassDndHelper {
+             Toast.makeText(context, "开启失败，请检查勿扰权限", Toast.LENGTH_SHORT).show()
+             return
+         }
+-        // 课堂内交给课堂生命周期（下课自动恢复）；课堂外保持到用户再点一次
++        // 课堂内交给课堂生命周期（下课后保持勿扰）；课堂外保持到用户再点一次
+         markManual(context, !inClass)
+ 
+         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+@@ -475,7 +474,7 @@ object ClassDndHelper {
+             MODE_PRIORITY -> "勿扰模式"
+             else -> "勿扰"
+         }
+-        val tail = if (inClass) "，下课自动恢复" else "，再次点击可关闭"
++        val tail = if (inClass) "" else "，再次点击可关闭"
+         Toast.makeText(context, "已开启$what$tail", Toast.LENGTH_SHORT).show()
+     }
+ 
+@@ -503,20 +502,15 @@ object ClassDndHelper {
+             val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
+ 
+             val startRc = RC_DND_START_BASE + course.id.hashCode()
+-            val endRc = RC_DND_END_BASE + course.id.hashCode()
+             scheduleOne(context, alarmManager, startRc, ClassDndReceiver.ACTION_CLASS_START, startMillis)
+-            scheduleOne(context, alarmManager, endRc, ClassDndReceiver.ACTION_CLASS_END, endMillis)
+             rcs += startRc
+-            rcs += endRc
+         }
+ 
+-        // 测试课同样注册上课/下课闹钟：课前 70 秒、课中 120 秒的窗口
+-        // 靠每分钟对账粒度太粗，必须走精确闹钟才能准时开、准时关
+-        testClassWindow(context)?.let { (start, end) ->
++        // 测试课同样注册上课闹钟：课前 70 秒、课中 120 秒的窗口
++        // 靠每分钟对账粒度太粗，必须走精确闹钟才能准时开（下课不自动恢复，无需下课闹钟）
++        testClassWindow(context)?.let { (start, _) ->
+             scheduleOne(context, alarmManager, RC_DND_TEST_START, ClassDndReceiver.ACTION_CLASS_START, start)
+-            scheduleOne(context, alarmManager, RC_DND_TEST_END, ClassDndReceiver.ACTION_CLASS_END, end)
+             rcs += RC_DND_TEST_START
+-            rcs += RC_DND_TEST_END
+         }
+         writeRcSet(context, rcs)
+     }
+diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt b/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
+index 176e7a9..dc33d83 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/activities/AboutActivity.kt
+@@ -486,6 +486,19 @@ fun AboutScreen(
+                                         }
+                                     )
+                                 }
++                                if (!embedded) {
++                                    Text(
++                                        text = "本版本为个人 fork：上课自动开启勿扰，下课后保持勿扰不自动恢复；更新请到 xiaoxun007/NexioSchedule 的 Releases 下载。",
++                                        fontSize = 13.sp,
++                                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
++                                        modifier = Modifier.padding(
++                                            start = 20.dp,
++                                            end = 18.dp,
++                                            top = 12.dp,
++                                            bottom = 16.dp
++                                        )
++                                    )
++                                }
+                             }
+                         }
+                     }
+diff --git a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
+index 76153dc..c566289 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/activities/CourseReminderScreen.kt
+@@ -498,7 +498,7 @@ fun CourseReminderScreen(
+                                 summary = if (!dndPermissionGranted) {
+                                     "需要先授予勿扰权限才能自动开启勿扰"
+                                 } else {
+-                                    "上课时自动开启勿扰，下课后自动恢复"
++                                    "上课时自动开启勿扰，下课后保持勿扰（可点通知/超级岛按钮手动关闭）"
+                                 },
+                                 checked = classDndEnabled,
+                                 // 仅受总开关约束：无权限时仍可点开，会跳到授权卡片引导
+diff --git a/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt b/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
+index 4ebc523..2368a17 100644
+--- a/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
++++ b/app/src/main/java/com/haooz/chedule/ui/components/UpdateDialog.kt
+@@ -1,6 +1,8 @@
+ package com.haooz.chedule.ui.components
+ 
+ import android.content.Context
++import android.content.Intent
++import android.net.Uri
+ import android.util.Log
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+@@ -48,7 +50,8 @@ import kotlin.time.Duration.Companion.milliseconds
+ 
+ /**
+  * 更新弹窗：每天启动时检查一次更新，有新版本则弹窗提示。
+- * 点「更新」直接下载安装包（已下好则直接安装），不再跳转设置页再点一次。
++ * 本 fork：点「更新」跳转到 fork 仓库 Releases 页下载定制版 APK，
++ * 不内嵌下载/安装（避免误装上游原版覆盖「下课不自动恢复」的定制功能）。
+  */
+ @Composable
+ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = null) {
+@@ -186,7 +189,7 @@ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = nu
+         isInstalling -> "安装中"
+         isDownloading -> "正在下载"
+         downloadComplete || hasDownloadedApk -> "安装"
+-        else -> "更新"
++        else -> "去下载"
+     }
+ 
+     OverlayDialog(
+@@ -257,16 +260,16 @@ internal fun UpdateDialog(liquidGlassBackdrop: com.kyant.backdrop.Backdrop? = nu
+                     enabled = !isDownloading && !isInstalling,
+                     onClick = {
+                         hapticFeedback.performHapticFeedback(HapticFeedbackType.Confirm)
+-                        when {
+-                            isDownloading || isInstalling -> Unit
+-                            downloadComplete || hasDownloadedApk -> {
+-                                if (downloadedFile == null && updateTagName.isNotBlank()) {
+-                                    downloadedFile = UpdateInstaller.apkFile(context, updateTagName)
+-                                }
+-                                startInstall()
+-                            }
+-                            else -> startDownload()
++                        if (isDownloading || isInstalling) return@Button
++                        // 本 fork：跳转到 fork 仓库 Releases 页下载定制版
++                        try {
++                            context.startActivity(
++                                Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/xiaoxun007/NexioSchedule/releases"))
++                            )
++                        } catch (e: Exception) {
++                            android.widget.Toast.makeText(context, "无法打开浏览器: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                         }
++                        showUpdateDialog = false
+                     },
+                     colors = ButtonDefaults.buttonColorsPrimary()
+                 ) {
