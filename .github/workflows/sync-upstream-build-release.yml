@@ -80,6 +80,9 @@ jobs:
           git show master:signing/debug.keystore.b64 > signing/debug.keystore.b64
           # 应用「下课自动关闭可选」补丁；--3way 失败时降级普通 apply
           git apply --3way /tmp/class-dnd-auto-end.patch || git apply /tmp/class-dnd-auto-end.patch
+          # 应用「wearable 互联稳定性」补丁（ACK 确认+5s 超时+失败重试+权限日志升级）；--3way 失败时降级普通 apply
+          git show master:patches/wearable-sync-stability.patch > /tmp/wearable-sync-stability.patch
+          git apply --3way /tmp/wearable-sync-stability.patch || git apply /tmp/wearable-sync-stability.patch
           git status --short
 
       - name: 设置 JDK 17
