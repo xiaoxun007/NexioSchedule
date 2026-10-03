@@ -86,6 +86,12 @@ jobs:
           # 应用「wearable 推送反馈」补丁（Snackbar 四态：成功/未发现设备/失败+原因）；--3way 失败时降级普通 apply
           git show master:patches/wearable-push-feedback.patch > /tmp/wearable-push-feedback.patch
           git apply --3way /tmp/wearable-push-feedback.patch || git apply /tmp/wearable-push-feedback.patch
+          # 应用「wearable 推送诊断」补丁（连接状态/配对日志/调试信息增强）；--3way 失败时降级普通 apply
+          git show master:patches/wearable-push-diagnostics.patch > /tmp/wearable-push-diagnostics.patch
+          git apply --3way /tmp/wearable-push-diagnostics.patch || git apply /tmp/wearable-push-diagnostics.patch
+          # 应用「wearable 启动应用」补丁（手表端拉起手机 App）；--3way 失败时降级普通 apply
+          git show master:patches/wearable-launch-app.patch > /tmp/wearable-launch-app.patch
+          git apply --3way /tmp/wearable-launch-app.patch || git apply /tmp/wearable-launch-app.patch
           git status --short
 
       - name: 设置 JDK 17
