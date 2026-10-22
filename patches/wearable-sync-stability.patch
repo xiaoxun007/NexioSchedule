@@ -1,0 +1,390 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+index bb3511e1..f19df4b6 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -12,8 +12,20 @@ import com.xiaomi.xms.wearable.node.NodeApi
+ import org.json.JSONObject
+ import java.util.concurrent.Executors
+ import java.util.concurrent.ScheduledExecutorService
++import java.util.concurrent.ScheduledFuture
+ import java.util.concurrent.TimeUnit
+ import java.util.concurrent.atomic.AtomicBoolean
++import java.util.concurrent.atomic.AtomicInteger
++
++/** 推送诊断快照（只读），由 UI 层调用 getDiagnostics() 获取。 */
++data class PushDiagnostics(
++    val nodeConnected: Boolean,
++    val lastResolveAt: Long,
++    val permissionGranted: Boolean,
++    val lastPushOutcome: String,
++    val lastPushAt: Long,
++    val pendingQueued: Boolean,
++)
+ 
+ /**
+  * 小米穿戴（手表 rpk）课表推送。
+@@ -28,6 +40,12 @@ object WearableScheduleSync {
+     private const val TAG = "WearableScheduleSync"
+     private const val PROTOCOL = "nexio.schedule"
+ 
++    /** ACK 确认超时：sendMessage 成功后等待手环回 ack 的秒数 */
++    private const val ACK_TIMEOUT_SEC = 5L
++
++    /** 最多重试次数（不含首次发送），即最多共 3 次尝试 */
++    private const val MAX_RETRIES = 2
++
+     /** 上一包推送刚落地、期间又攒下变更，补推时用的归因名。 */
+     private const val REASON_PUSH_DRAINED = "push-drained"
+ 
+@@ -48,6 +66,42 @@ object WearableScheduleSync {
+     @Volatile
+     private var pendingScheduleName: String = ""
+ 
++    /** 当前在途推送的 sentAt（取自 payload JSON）；手环 ack 带同一 sentAt 才视为本次推送成功。-1=无在途推送 */
++    @Volatile
++    private var inFlightSentAt: Long = -1L
++
++    /** 已重试次数（不计首次发送）；ACK 成功或彻底放弃时清零 */
++    private val retryCount = AtomicInteger(0)
++
++    /** ACK 超时定时器；收到 ack 后取消 */
++    @Volatile
++    private var ackTimeoutFuture: ScheduledFuture<*>? = null
++
++    /**
++     * 手动导出推送的结果回调槽。仅由 exportToWearable 在派发 manual-export 前挂入；
++     * 4 个结算点触发后立即清空。回调运行在后台线程，调用方自行切主线程。
++     */
++    @Volatile
++    var manualOutcome: ((ok: Boolean, reason: String) -> Unit)? = null
++
++    /** 标记当前在途推送是否来自手动导出 */
++    @Volatile
++    private var manualInFlight: Boolean = false
++
++    // ---- 诊断字段（只读观测，不影响推送/ACK/重试/CAS 逻辑） ----
++    @Volatile private var lastResolveOk: Boolean = false
++    @Volatile private var lastResolveAt: Long = 0L
++    @Volatile private var lastPushOutcome: String = ""
++    @Volatile private var lastPushAt: Long = 0L
++
++    /** 触发并消费手动导出结果回调（幂等） */
++    private fun fireManualOutcome(ok: Boolean, reason: String) {
++        val cb = manualOutcome ?: return
++        manualOutcome = null
++        manualInFlight = false
++        cb(ok, reason)
++    }
++
+     private lateinit var appContext: Context
+     private var nodeApi: NodeApi? = null
+     private var messageApi: MessageApi? = null
+@@ -63,8 +117,29 @@ object WearableScheduleSync {
+             val protocol = json.optString("protocol")
+             if (protocol.isNotEmpty() && protocol != PROTOCOL) return@OnMessageReceivedListener
+             val action = json.optString("action")
+-            if (action == "request" || action.isEmpty()) {
+-                pushSchedule("watch-request")
++            when (action) {
++                // 手环收到 payload 后回 ack（带同一 sentAt）。仅当与在途推送匹配时才确认成功。
++                "ack" -> {
++                    val ackSentAt = json.optLong("sentAt", -1L)
++                    val expected = inFlightSentAt
++                    if (expected > 0L && ackSentAt == expected) {
++                        if (pushing.compareAndSet(true, false)) {
++                            cancelAckTimeout()
++                            retryCount.set(0)
++                            inFlightSentAt = -1L
++                            NexioLog.i(TAG, "push ack confirmed, sentAt=$ackSentAt")
++                            lastPushOutcome = "成功"
++                            lastPushAt = System.currentTimeMillis()
++                            if (manualInFlight) fireManualOutcome(true, "")
++                            releasePendingIfAny()
++                        }
++                    } else {
++                        NexioLog.i(TAG, "ignore ack sentAt=$ackSentAt expected=$expected")
++                    }
++                }
++                "request", "" -> {
++                    pushSchedule("watch-request")
++                }
+             }
+         } catch (e: Exception) {
+             NexioLog.w(TAG, "handle message fail: ${e.message}")
+@@ -109,6 +184,12 @@ object WearableScheduleSync {
+         if (!initialized.get()) {
+             init(context)
+         }
++        // 上一轮悬挂回调先触发旧值
++        manualOutcome?.let { old ->
++            manualOutcome = null
++            manualInFlight = false
++            old(false, "已被新的导出取代")
++        }
+         return try {
+             val repo = CourseRepository.getInstance()
+             val json = WatchPayload.buildFullJson(repo, context.applicationContext, scheduleName)
+@@ -117,8 +198,10 @@ object WearableScheduleSync {
+             val file = java.io.File(dir, "nexio-watch-schedule.json")
+             file.writeText(json, Charsets.UTF_8)
+             NexioLog.i(TAG, "export json -> ${file.absolutePath}")
++            // 本地导出成功：挂回调，推送异步派发，结果由结算点回调
++            manualOutcome = onDone
++            manualInFlight = false
+             ensurePermissionThenPush("manual-export", scheduleName)
+-            onDone?.invoke(true, file.absolutePath)
+             file.absolutePath
+         } catch (e: Exception) {
+             NexioLog.w(TAG, "export fail: ${e.message}")
+@@ -148,6 +231,9 @@ object WearableScheduleSync {
+                 NexioLog.w(TAG, "push skip ($reason): no node, queued")
+                 pendingPush.set(true)
+                 pendingScheduleName = scheduleName
++                lastPushOutcome = "未发现已连接的手表节点"
++                lastPushAt = System.currentTimeMillis()
++                if (reason == "manual-export") fireManualOutcome(false, "no-device")
+                 return@execute
+             }
+             if (permissionGranted.get()) {
+@@ -156,6 +242,9 @@ object WearableScheduleSync {
+             }
+             val auth = authApi ?: run {
+                 NexioLog.w(TAG, "authApi null")
++                lastPushOutcome = "权限未授予或授权失败"
++                lastPushAt = System.currentTimeMillis()
++                if (reason == "manual-export") fireManualOutcome(false, "权限未授予或授权失败")
+                 return@execute
+             }
+             auth.checkPermissions(id, arrayOf(Permission.DEVICE_MANAGER))
+@@ -174,16 +263,31 @@ object WearableScheduleSync {
+                                 if (ok) {
+                                     doPush(reason, scheduleName, id)
+                                 } else {
+-                                    NexioLog.w(TAG, "push fail ($reason): permission not granted")
++                                    NexioLog.w(
++                                        TAG,
++                                        "push fail ($reason): 互联/消息权限未授予（DEVICE_MANAGER）。" +
++                                            "排查指引：1) 系统设置→应用→NexioSchedule→权限，授予「连接与共享/设备互联/邻近设备」类权限；" +
++                                            "2) 确认手机端小米运动健康/小米穿戴 App 已与手环正常连接、后台运行；" +
++                                            "3) 授权后到设置页点一次「导出到手环」手动重试。"
++                                    )
++                                    lastPushOutcome = "权限未授予或授权失败"
++                                    lastPushAt = System.currentTimeMillis()
++                                    if (reason == "manual-export") fireManualOutcome(false, "权限未授予或授权失败")
+                                 }
+                             }
+                             .addOnFailureListener { e ->
+                                 NexioLog.w(TAG, "requestPermission fail: ${e.message}")
++                                lastPushOutcome = "权限未授予或授权失败"
++                                lastPushAt = System.currentTimeMillis()
++                                if (reason == "manual-export") fireManualOutcome(false, "权限未授予或授权失败")
+                             }
+                     }
+                 }
+                 .addOnFailureListener { e ->
+                     NexioLog.w(TAG, "checkPermission fail: ${e.message}")
++                    lastPushOutcome = "权限未授予或授权失败"
++                    lastPushAt = System.currentTimeMillis()
++                    if (reason == "manual-export") fireManualOutcome(false, "权限未授予或授权失败")
+                 }
+         }
+     }
+@@ -201,40 +305,82 @@ object WearableScheduleSync {
+ 
+     private fun doPush(reason: String, scheduleName: String, id: String) {
+         if (!pushing.compareAndSet(false, true)) {
+-            // 上一次还没发完就记账重排，等它落地再补一次，避免连点「推送到手环」连发多包
+             pendingPush.set(true)
+             pendingScheduleName = scheduleName
+             return
+         }
++        if (reason == "manual-export") manualInFlight = true
+         try {
+             val repo = CourseRepository.getInstance()
+-            // v4 整表推送：一次下发完整学期（课程+周次规则+设置+节次时间+假期），
+-            // 手表自行推算任意日期。
+             val payload = WatchPayload.buildFullJson(repo, appContext, scheduleName)
+-            val api = messageApi ?: run {
+-                releasePushSlot()
++            val sentAt = try {
++                JSONObject(payload).optLong("sentAt", -1L)
++            } catch (e: Exception) {
++                -1L
++            }
++            inFlightSentAt = sentAt
++            val api = messageApi
++            if (api == null) {
++                onPushOutcomeFailure("messageApi null", reason, scheduleName, id)
+                 return
+             }
++            // sendMessage 成功 ≠ 手环收到；成功后仅启动 ACK 超时器，pushing 保持到 ack 匹配或重试放弃
+             api.sendMessage(id, payload.toByteArray(Charsets.UTF_8))
+                 .addOnSuccessListener {
+-                    NexioLog.i(TAG, "push ok ($reason), node=$id, bytes=${payload.length}")
+-                    // ⚠ 推送槽必须在这里、也就是 sendMessage 真正落地后才释放。
+-                    //   放进 finally 的话会在 sendMessage 还没回调时就把标记清掉，
+-                    //   合帧形同虚设，连点「推送到手环」会连发多包。
+-                    releasePushSlot()
++                    NexioLog.i(TAG, "push sent ($reason), node=$id, bytes=${payload.length}, sentAt=$sentAt")
++                    armAckTimeout(reason, scheduleName, id)
+                 }
+                 .addOnFailureListener { e ->
+-                    NexioLog.w(TAG, "push fail ($reason): ${e.message}")
+-                    releasePushSlot()
++                    NexioLog.w(TAG, "push send fail ($reason): ${e.message}")
++                    onPushOutcomeFailure(e.message ?: "send fail", reason, scheduleName, id)
+                 }
+         } catch (e: Exception) {
+             NexioLog.w(TAG, "push error ($reason): ${e.message}")
+-            releasePushSlot()
++            onPushOutcomeFailure(e.message ?: "push error", reason, scheduleName, id)
+         }
+     }
+ 
+-    /** 释放推送槽；期间又攒下了变更就立刻补推一次。 */
+-    private fun releasePushSlot() {
++    /** 启动 ACK 超时器 */
++    private fun armAckTimeout(reason: String, scheduleName: String, id: String) {
++        val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
++        cancelAckTimeout()
++        ackTimeoutFuture = exec.schedule({
++            NexioLog.w(TAG, "push ack timeout ($reason): no ack within ${ACK_TIMEOUT_SEC}s, sentAt=$inFlightSentAt")
++            onPushOutcomeFailure("ack timeout", reason, scheduleName, id)
++        }, ACK_TIMEOUT_SEC, TimeUnit.SECONDS)
++    }
++
++    private fun cancelAckTimeout() {
++        ackTimeoutFuture?.cancel(false)
++        ackTimeoutFuture = null
++    }
++
++    /** 推送失败统一出口：CAS 抢锁后按退避重试或彻底放弃 */
++    private fun onPushOutcomeFailure(errMsg: String, reason: String, scheduleName: String, id: String) {
++        cancelAckTimeout()
++        if (!pushing.compareAndSet(true, false)) {
++            NexioLog.i(TAG, "push outcome already settled ($reason), ignore: $errMsg")
++            return
++        }
++        val retriesDone = retryCount.getAndIncrement()
++        if (retriesDone < MAX_RETRIES) {
++            val backoffSec = if (retriesDone == 0) 1L else 2L
++            NexioLog.w(TAG, "push retry #${retriesDone + 1}/$MAX_RETRIES in ${backoffSec}s ($reason): $errMsg")
++            val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
++            exec.schedule({ doPush(reason, scheduleName, id) }, backoffSec, TimeUnit.SECONDS)
++        } else {
++            NexioLog.w(TAG, "push give up ($reason): $errMsg (total attempts=${retriesDone + 1})")
++            retryCount.set(0)
++            inFlightSentAt = -1L
++            lastPushOutcome = "推送失败：$errMsg"
++            lastPushAt = System.currentTimeMillis()
++            if (manualInFlight) fireManualOutcome(false, errMsg)
++            releasePendingIfAny()
++        }
++    }
++
++    /** 释放推送槽后补推 pending（与原 releasePushSlot 一致） */
++    private fun releasePendingIfAny() {
+         pushing.set(false)
+         if (pendingPush.get()) {
+             schedulePush(0L, REASON_PUSH_DRAINED)
+@@ -251,28 +397,42 @@ object WearableScheduleSync {
+                         val changed = nodeId != first.id
+                         nodeId = first.id
+                         NexioLog.i(TAG, "node ready: ${first.id} changed=$changed pending=${pendingPush.get()}")
++                        lastResolveOk = true
++                        lastResolveAt = System.currentTimeMillis()
+                         bindMessageListener(first.id)
+-                        // 连上后补推排队的课表
+                         if (changed || pendingPush.get()) {
+                             ensurePermissionThenPush("node-ready", pendingScheduleName)
+                         }
+                     } else {
+                         NexioLog.w(TAG, "connectedNodes empty")
+                         nodeId = null
++                        lastResolveOk = false
++                        lastResolveAt = System.currentTimeMillis()
+                     }
+                 }
+                 .addOnFailureListener { e ->
+                     NexioLog.w(TAG, "getConnectedNodes fail: ${e.message}")
++                    lastResolveOk = false
++                    lastResolveAt = System.currentTimeMillis()
+                 }
+         } catch (e: Exception) {
+             NexioLog.w(TAG, "tryResolveNode fail: ${e.message}")
++            lastResolveOk = false
++            lastResolveAt = System.currentTimeMillis()
+         }
+     }
+ 
+     private fun resolveNodeId(): String? {
+-        nodeId?.let { return it }
++        nodeId?.let {
++            lastResolveOk = true
++            lastResolveAt = System.currentTimeMillis()
++            return it
++        }
+         tryResolveNode()
+-        return nodeId
++        val result = nodeId
++        lastResolveOk = result != null
++        lastResolveAt = System.currentTimeMillis()
++        return result
+     }
+ 
+     private fun bindMessageListener(id: String) {
+@@ -302,4 +462,54 @@ object WearableScheduleSync {
+             tryResolveNode()
+         }, 5, 30, TimeUnit.SECONDS)
+     }
++
++    /** 获取推送诊断快照（只读，不触发任何推送/绑定/权限请求） */
++    fun getDiagnostics(): PushDiagnostics = PushDiagnostics(
++        nodeConnected = lastResolveOk,
++        lastResolveAt = lastResolveAt,
++        permissionGranted = permissionGranted.get(),
++        lastPushOutcome = lastPushOutcome,
++        lastPushAt = lastPushAt,
++        pendingQueued = pendingPush.get(),
++    )
++
++    /**
++     * 拉起手表端课程表 App（失败全程静默，不弹任何 UI）。
++     * 权限未授予/无节点/未安装/调用失败均静默 return；hap uri 需真机验证。
++     */
++    fun launchWearScheduleApp(context: Context) {
++        if (!initialized.get()) init(context)
++        val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
++        exec.execute {
++            try {
++                if (!permissionGranted.get()) {
++                    NexioLog.i(TAG, "launchWearApp skip: permission not granted (silent)")
++                    return@execute
++                }
++                val id = resolveNodeId() ?: run {
++                    NexioLog.i(TAG, "launchWearApp skip: no node (silent)")
++                    return@execute
++                }
++                val api = nodeApi ?: run {
++                    NexioLog.i(TAG, "launchWearApp skip: nodeApi null (silent)")
++                    return@execute
++                }
++                api.isWearAppInstalled(id)
++                    .addOnSuccessListener { installed ->
++                        if (installed != true) {
++                            NexioLog.i(TAG, "launchWearApp skip: not installed (silent)")
++                            return@addOnSuccessListener
++                        }
++                        // uri 格式按官方文档交叉推断，需真机验证
++                        val uri = "hap://app/com.haooz.chedule/"
++                        api.launchWearApp(id, uri)
++                            .addOnSuccessListener { NexioLog.i(TAG, "launchWearApp ok: $uri") }
++                            .addOnFailureListener { e -> NexioLog.w(TAG, "launchWearApp fail: ${e.message} (silent)") }
++                    }
++                    .addOnFailureListener { e -> NexioLog.w(TAG, "isWearAppInstalled fail: ${e.message} (silent)") }
++            } catch (e: Exception) {
++                NexioLog.w(TAG, "launchWearScheduleApp error: ${e.message} (silent)")
++            }
++        }
++    }
+ }
