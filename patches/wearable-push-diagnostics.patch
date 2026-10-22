@@ -68,7 +68,7 @@ index be2821f6..58bb3611 100644
  
                  TabletSettingsDest.LocalBackup -> LocalBackupScreen(
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
-index a8987f1c..71da5d2a 100644
+index d2ae9f48..21edcb74 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
 @@ -701,7 +701,9 @@ fun BackupAndMigrationRoute(

@@ -1,5 +1,5 @@
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
-index 31f4f4f5..8fc40ac3 100644
+index a563d488..f9f976ec 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 @@ -5,6 +5,7 @@
@@ -18,16 +18,16 @@ index 31f4f4f5..8fc40ac3 100644
  import com.haooz.chedule.data.Course
  import com.haooz.chedule.data.CourseRepository
  import com.haooz.chedule.data.DayScheduleResolver
-@@ -77,6 +79,9 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
+@@ -76,6 +78,9 @@ import top.yukonga.miuix.kmp.basic.DropdownEntry
+ import top.yukonga.miuix.kmp.basic.DropdownItem
  import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
  import top.yukonga.miuix.kmp.basic.Scaffold
- import top.yukonga.miuix.kmp.basic.SmallTitle
 +import top.yukonga.miuix.kmp.basic.SnackbarDuration
 +import top.yukonga.miuix.kmp.basic.SnackbarHost
 +import top.yukonga.miuix.kmp.basic.SnackbarHostState
- import top.yukonga.miuix.kmp.basic.Text
+ import top.yukonga.miuix.kmp.basic.SmallTitle
+ import com.haooz.chedule.ui.components.text.miuix.Text as Text
  import top.yukonga.miuix.kmp.basic.TextButton
- import top.yukonga.miuix.kmp.layout.CollapsibleTopAppBarDefaults
 @@ -96,6 +101,16 @@ enum class ScheduleDataManageMode {
      Backup,
  }
@@ -50,8 +50,8 @@ index 31f4f4f5..8fc40ac3 100644
      onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
      /** 导出到手环（Android 专有；未连接/不支持时返回 null） */
 -    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
-+    onExportToWearable: suspend (scheduleName: String, onDone: ((ok: Boolean, reason: String) -> Unit)?) -> String? = { _, _ -> null },
-+    /** 推送诊断快照（Android 专有；Android 宿主注入 getDiagnostics()） */
++    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
++    /** 推送诊断快照（Android 专有；Android 宿主从 WearableScheduleSync.getDiagnostics() 映射） */
 +    wearableDiag: () -> WearableDiag? = { null },
 +    /** 进入导出页时的平台副作用（拉起手表端 App，Android 专有） */
 +    onEnterExportScreen: () -> Unit = {},
@@ -73,11 +73,10 @@ index 31f4f4f5..8fc40ac3 100644
      Scaffold(
          topBar = {}
      ) { paddingValues ->
-@@ -213,6 +237,13 @@ fun BackupAndMigrationScreen(
+@@ -213,6 +237,12 @@ fun BackupAndMigrationScreen(
              snapshotFlow { listState.firstVisibleItemScrollOffset }
                  .collect { offset -> listScrollY = offset }
          }
-+        // 进入导出页：读取诊断快照 + 触发平台副作用（拉起手表端 App）
 +        LaunchedEffect(mode) {
 +            if (mode == ScheduleDataManageMode.Export) {
 +                pushDiag = wearableDiag()
@@ -87,7 +86,7 @@ index 31f4f4f5..8fc40ac3 100644
          LazyColumn(
              state = listState,
              modifier = Modifier.fillMaxSize()
-@@ -495,19 +526,84 @@ fun BackupAndMigrationScreen(
+@@ -495,19 +525,63 @@ fun BackupAndMigrationScreen(
                                  title = "导出到手环",
                                  summary = "打包JSON并推送到手表/手环",
                                  onClick = {
@@ -120,8 +119,8 @@ index 31f4f4f5..8fc40ac3 100644
 +                                                )
 +                                            }
 +                                            pushDiag = wearableDiag()
-                                         }
-                                     }
++                                        }
++                                    }
 +                                    localPath = resultPath
 +                                    if (resultPath != null) {
 +                                        scope.launch {
@@ -129,47 +128,26 @@ index 31f4f4f5..8fc40ac3 100644
 +                                                "课表已导出到本地，正在推送…",
 +                                                duration = SnackbarDuration.Short
 +                                            )
-+                                        }
-+                                    }
+                                         }
+                                     }
 +                                    }
                                  }
                              )
                          }
                      }
                  }
-+                // 推送诊断面板
 +                item {
 +                    val diag = pushDiag
-+                    Card(
-+                        cornerRadius = 20.dp,
-+                        modifier = Modifier.fillMaxWidth(),
-+                        insideMargin = PaddingValues(0.dp)
-+                    ) {
++                    Card(cornerRadius = 20.dp, modifier = Modifier.fillMaxWidth()) {
 +                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
 +                            Text("推送诊断", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface)
 +                            if (diag == null) {
 +                                Text("读取中…", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
 +                            } else {
-+                                Text(
-+                                    "节点：" + (if (diag.nodeConnected) "在线" else "离线"),
-+                                    fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                    modifier = Modifier.padding(top = 6.dp)
-+                                )
-+                                Text(
-+                                    "互联权限：" + (if (diag.permissionGranted) "已授予" else "未授予"),
-+                                    fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                    modifier = Modifier.padding(top = 4.dp)
-+                                )
-+                                Text(
-+                                    "最近推送：" + (if (diag.lastPushOutcome.isEmpty()) "暂无记录" else diag.lastPushOutcome),
-+                                    fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                    modifier = Modifier.padding(top = 4.dp)
-+                                )
-+                                Text(
-+                                    "排队队列：" + (if (diag.pendingQueued) "有课表待补推" else "无"),
-+                                    fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                    modifier = Modifier.padding(top = 4.dp)
-+                                )
++                                Text("节点：" + (if (diag.nodeConnected) "在线" else "离线"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
++                                Text("互联权限：" + (if (diag.permissionGranted) "已授予" else "未授予"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("最近推送：" + (if (diag.lastPushOutcome.isEmpty()) "暂无记录" else diag.lastPushOutcome), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("排队队列：" + (if (diag.pendingQueued) "有课表待补推" else "无"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
 +                            }
 +                        }
 +                    }
@@ -177,7 +155,7 @@ index 31f4f4f5..8fc40ac3 100644
              }
  
              if (mode == ScheduleDataManageMode.Backup) {
-@@ -543,6 +639,12 @@ fun BackupAndMigrationScreen(
+@@ -543,6 +617,12 @@ fun BackupAndMigrationScreen(
          }
      }
  
