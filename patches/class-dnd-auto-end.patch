@@ -1,0 +1,56 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+index 64565aad..6e7460be 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+@@ -474,8 +474,7 @@ object ClassDndHelper {
+         if (!isInClass(context)) {
+             // 用户从通知 / 超级岛按钮手动开启的：不在课堂也保持，等用户再点一次才还原
+             if (isManualHeld(context)) return
+-            // 下课：系统状态还和本应用设置的一致才还原
+-            handBack(context, requireConsistency = true)
++            // fork 定制：下课不自动恢复，保持静音/勿扰；用户可手动从通知 / 超级岛按钮还原
+             return
+         }
+         val mode = currentMode(context)
+@@ -551,7 +550,7 @@ object ClassDndHelper {
+             Toast.makeText(context, "开启失败，请检查勿扰权限", Toast.LENGTH_SHORT).show()
+             return
+         }
+-        // 课堂内交给课堂生命周期（下课自动恢复）；课堂外保持到用户再点一次
++        // fork 定制：课堂内下课后保持勿扰；课堂外保持到用户再点一次
+         markManual(context, !inClass)
+ 
+         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+@@ -562,7 +561,8 @@ object ClassDndHelper {
+             MODE_PRIORITY -> "勿扰模式"
+             else -> "勿扰"
+         }
+-        val tail = if (inClass) "，下课自动恢复" else "，再次点击可关闭"
++        // fork 定制：课堂内不再说"下课自动恢复"
++        val tail = if (inClass) "" else "，再次点击可关闭"
+         Toast.makeText(context, "已开启$what$tail", Toast.LENGTH_SHORT).show()
+     }
+ 
+@@ -592,19 +592,15 @@ object ClassDndHelper {
+             val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
+ 
+             val startRc = RC_DND_START_BASE + course.id.hashCode()
+-            val endRc = RC_DND_END_BASE + course.id.hashCode()
++            // fork 定制：不注册下课闹钟（下课保持勿扰，不自动恢复）
+             scheduleOne(context, alarmManager, startRc, ClassDndReceiver.ACTION_CLASS_START, startMillis)
+-            scheduleOne(context, alarmManager, endRc, ClassDndReceiver.ACTION_CLASS_END, endMillis)
+             rcs += startRc
+-            rcs += endRc
+         }
+ 
+-        // 测试课同样注册上课/下课闹钟：分钟级对账太粗，走精确闹钟才能准时开、准时关
+-        testClassWindow(context)?.let { (start, end) ->
++        // 测试课同样注册上课闹钟（fork 定制：下课不自动恢复，无需下课闹钟）
++        testClassWindow(context)?.let { (start, _) ->
+             scheduleOne(context, alarmManager, RC_DND_TEST_START, ClassDndReceiver.ACTION_CLASS_START, start)
+-            scheduleOne(context, alarmManager, RC_DND_TEST_END, ClassDndReceiver.ACTION_CLASS_END, end)
+             rcs += RC_DND_TEST_START
+-            rcs += RC_DND_TEST_END
+         }
+         writeRcSet(context, rcs)
+     }
