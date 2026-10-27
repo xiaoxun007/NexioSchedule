@@ -1,7 +1,7 @@
 # 同步上游并构建 Release APK
 #
 # 功能：
-# 1. 每小时检查上游 HaoZai000/NexioSchedule 是否有新提交
+# 1. 每隔 2 天凌晨 3 点检查上游 HaoZai000/NexioSchedule 是否有新提交
 # 2. 有更新时：将 fork 的 master 同步到上游最新，并重新应用「下课自动关闭可选」功能补丁
 # 3. 构建 R8 优化后的 release APK（调试密钥签名，可直接安装）
 # 4. 上传构建产物 + 发布 GitHub Release
@@ -12,7 +12,7 @@ name: 同步上游并构建 Release APK
 
 "on":
   schedule:
-    - cron: '0 * * * *'          # 每小时检查上游是否有新提交
+    - cron: '0 3 */2 * *'         # 每隔 2 天凌晨 3 点检查上游是否有新提交
   workflow_dispatch: {}          # 支持手动触发
 
 permissions:

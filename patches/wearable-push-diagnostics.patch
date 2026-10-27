@@ -1,8 +1,8 @@
 diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
-index f7f2675f..2c08075e 100644
+index b265ecd4..a1d46e21 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
-@@ -302,7 +302,19 @@ private fun AndroidBackupAndMigrationRoute(router: AppRouter, mode: ScheduleData
+@@ -303,7 +303,12 @@ private fun AndroidBackupAndMigrationRoute(router: AppRouter, mode: ScheduleData
              )
          },
          // 手环推送
@@ -10,24 +10,17 @@ index f7f2675f..2c08075e 100644
 +        onExportToWearable = { name, onDone -> WearableScheduleSync.exportToWearable(context, name, onDone) },
 +        wearableDiag = {
 +            val d = com.haooz.chedule.wearable.WearableScheduleSync.getDiagnostics()
-+            com.haooz.chedule.ui.activities.WearableDiag(
-+                nodeConnected = d.nodeConnected,
-+                lastResolveAt = d.lastResolveAt,
-+                permissionGranted = d.permissionGranted,
-+                lastPushOutcome = d.lastPushOutcome,
-+                lastPushAt = d.lastPushAt,
-+                pendingQueued = d.pendingQueued,
-+            )
++            com.haooz.chedule.ui.activities.WearableDiag(d.nodeConnected, d.lastResolveAt, d.permissionGranted, d.lastPushOutcome, d.lastPushAt, d.pendingQueued)
 +        },
 +        onEnterExportScreen = { com.haooz.chedule.wearable.WearableScheduleSync.launchWearScheduleApp(context) },
      )
  }
  
 diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt b/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt
-index be2821f6..58bb3611 100644
+index 431d8d45..c75bd97b 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt
-@@ -133,9 +133,17 @@ fun AndroidSettingsScreen(
+@@ -134,9 +134,14 @@ fun AndroidSettingsScreen(
                              onSharingChanged = onSharingChanged,
                          )
                      },
@@ -38,16 +31,13 @@ index be2821f6..58bb3611 100644
                      },
 +                    wearableDiag = {
 +                        val d = com.haooz.chedule.wearable.WearableScheduleSync.getDiagnostics()
-+                        com.haooz.chedule.ui.activities.WearableDiag(
-+                            d.nodeConnected, d.lastResolveAt, d.permissionGranted,
-+                            d.lastPushOutcome, d.lastPushAt, d.pendingQueued,
-+                        )
++                        com.haooz.chedule.ui.activities.WearableDiag(d.nodeConnected, d.lastResolveAt, d.permissionGranted, d.lastPushOutcome, d.lastPushAt, d.pendingQueued)
 +                    },
 +                    onEnterExportScreen = { com.haooz.chedule.wearable.WearableScheduleSync.launchWearScheduleApp(context) },
                  )
  
                  TabletSettingsDest.AiImport -> AiImportScreen(
-@@ -182,9 +190,17 @@ fun AndroidSettingsScreen(
+@@ -183,9 +188,14 @@ fun AndroidSettingsScreen(
                              onSharingChanged = onSharingChanged,
                          )
                      },
@@ -58,22 +48,19 @@ index be2821f6..58bb3611 100644
 +                    },
 +                    wearableDiag = {
 +                        val d = com.haooz.chedule.wearable.WearableScheduleSync.getDiagnostics()
-+                        com.haooz.chedule.ui.activities.WearableDiag(
-+                            d.nodeConnected, d.lastResolveAt, d.permissionGranted,
-+                            d.lastPushOutcome, d.lastPushAt, d.pendingQueued,
-+                        )
++                        com.haooz.chedule.ui.activities.WearableDiag(d.nodeConnected, d.lastResolveAt, d.permissionGranted, d.lastPushOutcome, d.lastPushAt, d.pendingQueued)
                      },
 +                    onEnterExportScreen = { com.haooz.chedule.wearable.WearableScheduleSync.launchWearScheduleApp(context) },
                  )
  
                  TabletSettingsDest.LocalBackup -> LocalBackupScreen(
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
-index d2ae9f48..21edcb74 100644
+index 7312a643..9136565b 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
-@@ -701,7 +701,9 @@ fun BackupAndMigrationRoute(
+@@ -695,7 +695,9 @@ fun BackupAndMigrationRoute(
      -> Result<ThirdPartySharePayload> =
-         { source, _ -> Result.failure(IllegalStateException("当前平台不支持${source.displayName}")) },
+         { source, _ -> Result.failure(IllegalStateException(ChromeStr.platformUnsupported(source.displayName))) },
      onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
 -    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
 +    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
@@ -81,8 +68,8 @@ index d2ae9f48..21edcb74 100644
 +    onEnterExportScreen: () -> Unit = {},
  ) {
      val title = when (mode) {
-         ScheduleDataManageMode.Import -> "课表导入"
-@@ -722,6 +724,8 @@ fun BackupAndMigrationRoute(
+         ScheduleDataManageMode.Import -> ChromeStr.scheduleImport()
+@@ -716,6 +718,8 @@ fun BackupAndMigrationRoute(
              onImportThirdParty = onImportThirdParty,
              onShareSchedule = onShareSchedule,
              onExportToWearable = onExportToWearable,

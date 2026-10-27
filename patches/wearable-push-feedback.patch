@@ -1,5 +1,5 @@
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
-index a563d488..f9f976ec 100644
+index c53b34e6..6faf90f1 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 @@ -5,6 +5,7 @@
@@ -15,10 +15,10 @@ index a563d488..f9f976ec 100644
  import androidx.compose.ui.platform.LocalHapticFeedback
  import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
+ import com.haooz.chedule.ui.components.CardExpand
  import com.haooz.chedule.data.Course
  import com.haooz.chedule.data.CourseRepository
- import com.haooz.chedule.data.DayScheduleResolver
-@@ -76,6 +78,9 @@ import top.yukonga.miuix.kmp.basic.DropdownEntry
+@@ -80,6 +82,9 @@ import top.yukonga.miuix.kmp.basic.DropdownEntry
  import top.yukonga.miuix.kmp.basic.DropdownItem
  import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
  import top.yukonga.miuix.kmp.basic.Scaffold
@@ -28,11 +28,10 @@ index a563d488..f9f976ec 100644
  import top.yukonga.miuix.kmp.basic.SmallTitle
  import com.haooz.chedule.ui.components.text.miuix.Text as Text
  import top.yukonga.miuix.kmp.basic.TextButton
-@@ -96,6 +101,16 @@ enum class ScheduleDataManageMode {
+@@ -100,6 +105,15 @@ enum class ScheduleDataManageMode {
      Backup,
  }
  
-+/** 推送诊断快照（commonMain 定义，Android 宿主从 WearableScheduleSync.getDiagnostics() 映射） */
 +data class WearableDiag(
 +    val nodeConnected: Boolean,
 +    val lastResolveAt: Long,
@@ -45,27 +44,23 @@ index a563d488..f9f976ec 100644
  /** 课表导入 / 导出 / 备份页面；由 [mode] 决定展示内容，入口页共用。 */
  @Composable
  fun BackupAndMigrationScreen(
-@@ -121,10 +136,18 @@ fun BackupAndMigrationScreen(
+@@ -125,10 +139,14 @@ fun BackupAndMigrationScreen(
      /** 口令分享导出（上传 + 出图 + 系统分享，Android 专有，宿主注入）。 */
      onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
      /** 导出到手环（Android 专有；未连接/不支持时返回 null） */
 -    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
 +    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
-+    /** 推送诊断快照（Android 专有；Android 宿主从 WearableScheduleSync.getDiagnostics() 映射） */
 +    wearableDiag: () -> WearableDiag? = { null },
-+    /** 进入导出页时的平台副作用（拉起手表端 App，Android 专有） */
 +    onEnterExportScreen: () -> Unit = {},
  ) {
      val hapticFeedback = LocalHapticFeedback.current
      val scope = rememberCoroutineScope()
-+    // 「导出到手环」四态反馈 Snackbar
 +    val snackbarHostState = remember { SnackbarHostState() }
-+    // 推送诊断快照
 +    var pushDiag by remember { mutableStateOf<WearableDiag?>(null) }
      // 液态玻璃效果的透明下拉颜色
      val liquidGlassDropdownColors = DropdownDefaults.dropdownColors(
          containerColor = androidx.compose.ui.graphics.Color.Transparent,
-@@ -204,6 +227,7 @@ fun BackupAndMigrationScreen(
+@@ -208,6 +226,7 @@ fun BackupAndMigrationScreen(
          }
      }
  
@@ -73,7 +68,7 @@ index a563d488..f9f976ec 100644
      Scaffold(
          topBar = {}
      ) { paddingValues ->
-@@ -213,6 +237,12 @@ fun BackupAndMigrationScreen(
+@@ -217,6 +236,12 @@ fun BackupAndMigrationScreen(
              snapshotFlow { listState.firstVisibleItemScrollOffset }
                  .collect { offset -> listScrollY = offset }
          }
@@ -86,17 +81,17 @@ index a563d488..f9f976ec 100644
          LazyColumn(
              state = listState,
              modifier = Modifier.fillMaxSize()
-@@ -495,19 +525,63 @@ fun BackupAndMigrationScreen(
-                                 title = "导出到手环",
-                                 summary = "打包JSON并推送到手表/手环",
+@@ -500,19 +525,63 @@ fun BackupAndMigrationScreen(
+                                 title = BackupStr.exportToWearable(),
+                                 summary = BackupStr.exportToWearableSummary(),
                                  onClick = {
 +                                    var localPath: String? = null
                                      scope.launch {
 -                                        val path = onExportToWearable(selectedExportSchedule)
 -                                        if (path != null) {
--                                            showToast("已导出并推送手环\n$path", longDuration = true)
+-                                            showToast(BackupStr.wearableExportSuccessN(path), longDuration = true)
 -                                        } else {
--                                            showToast("导出失败，请确认手环已连接")
+-                                            showToast(BackupStr.wearableExportFailed())
 +                                    val resultPath = onExportToWearable(selectedExportSchedule) { ok, reason ->
 +                                        val p = localPath
 +                                        scope.launch {
@@ -155,7 +150,7 @@ index a563d488..f9f976ec 100644
              }
  
              if (mode == ScheduleDataManageMode.Backup) {
-@@ -543,6 +617,12 @@ fun BackupAndMigrationScreen(
+@@ -548,6 +617,12 @@ fun BackupAndMigrationScreen(
          }
      }
  
@@ -167,4 +162,4 @@ index a563d488..f9f976ec 100644
 +
      if (showImportConfirmDialog && pendingImportData != null) {
          OverlayDialog(
-             title = "导入课表",
+             title = BackupStr.importSchedule(),
