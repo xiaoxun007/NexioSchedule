@@ -1,0 +1,47 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+index 36decbac..fde427ae 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+@@ -471,8 +471,7 @@ object ClassDndHelper {
+         if (!isInClass(context)) {
+             // 用户从通知 / 超级岛按钮手动开启的：不在课堂也保持，等用户再点一次才还原
+             if (isManualHeld(context)) return
+-            // 下课：系统状态还和本应用设置的一致才还原
+-            handBack(context, requireConsistency = true)
++            // 下课保持勿扰不自动恢复（fork 定制）
+             return
+         }
+         val mode = currentMode(context)
+@@ -547,8 +546,8 @@ object ClassDndHelper {
+             Toast.makeText(context, AndroidNotifStr.dndEnableFailed(), Toast.LENGTH_SHORT).show()
+             return
+         }
+-        // 课堂内交给课堂生命周期（下课自动恢复）；课堂外保持到用户再点一次
+-        markManual(context, !inClass)
++        // 课堂内外都记为手动接管：下课不自动恢复（fork 定制）
++        markManual(context, true)
+ 
+         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+         scheduleClassDndAlarms(context, alarmManager)
+@@ -588,19 +587,14 @@ object ClassDndHelper {
+             val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
+ 
+             val startRc = RC_DND_START_BASE + course.id.hashCode()
+-            val endRc = RC_DND_END_BASE + course.id.hashCode()
+             scheduleOne(context, alarmManager, startRc, ClassDndReceiver.ACTION_CLASS_START, startMillis)
+-            scheduleOne(context, alarmManager, endRc, ClassDndReceiver.ACTION_CLASS_END, endMillis)
+             rcs += startRc
+-            rcs += endRc
+         }
+ 
+-        // 测试课同样注册上课/下课闹钟：分钟级对账太粗，走精确闹钟才能准时开、准时关
+-        testClassWindow(context)?.let { (start, end) ->
++        // 测试课只注册上课闹钟（下课不自动恢复，fork 定制）
++        testClassWindow(context)?.let { (start, _) ->
+             scheduleOne(context, alarmManager, RC_DND_TEST_START, ClassDndReceiver.ACTION_CLASS_START, start)
+-            scheduleOne(context, alarmManager, RC_DND_TEST_END, ClassDndReceiver.ACTION_CLASS_END, end)
+             rcs += RC_DND_TEST_START
+-            rcs += RC_DND_TEST_END
+         }
+         writeRcSet(context, rcs)
+     }

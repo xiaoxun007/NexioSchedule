@@ -1,0 +1,165 @@
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+index c53b34e6..6faf90f1 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -5,6 +5,7 @@
+ package com.haooz.chedule.ui.activities
+ 
+ import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.PaddingValues
+ import androidx.compose.foundation.layout.Row
+@@ -29,6 +30,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+ import androidx.compose.ui.input.nestedscroll.nestedScroll
+ import androidx.compose.ui.platform.LocalHapticFeedback
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
+ import com.haooz.chedule.ui.components.CardExpand
+ import com.haooz.chedule.data.Course
+ import com.haooz.chedule.data.CourseRepository
+@@ -80,6 +82,9 @@ import top.yukonga.miuix.kmp.basic.DropdownEntry
+ import top.yukonga.miuix.kmp.basic.DropdownItem
+ import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
+ import top.yukonga.miuix.kmp.basic.Scaffold
++import top.yukonga.miuix.kmp.basic.SnackbarDuration
++import top.yukonga.miuix.kmp.basic.SnackbarHost
++import top.yukonga.miuix.kmp.basic.SnackbarHostState
+ import top.yukonga.miuix.kmp.basic.SmallTitle
+ import com.haooz.chedule.ui.components.text.miuix.Text as Text
+ import top.yukonga.miuix.kmp.basic.TextButton
+@@ -100,6 +105,15 @@ enum class ScheduleDataManageMode {
+     Backup,
+ }
+ 
++data class WearableDiag(
++    val nodeConnected: Boolean,
++    val lastResolveAt: Long,
++    val permissionGranted: Boolean,
++    val lastPushOutcome: String,
++    val lastPushAt: Long,
++    val pendingQueued: Boolean,
++)
++
+ /** 课表导入 / 导出 / 备份页面；由 [mode] 决定展示内容，入口页共用。 */
+ @Composable
+ fun BackupAndMigrationScreen(
+@@ -125,10 +139,14 @@ fun BackupAndMigrationScreen(
+     /** 口令分享导出（上传 + 出图 + 系统分享，Android 专有，宿主注入）。 */
+     onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
+     /** 导出到手环（Android 专有；未连接/不支持时返回 null） */
+-    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
++    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
++    wearableDiag: () -> WearableDiag? = { null },
++    onEnterExportScreen: () -> Unit = {},
+ ) {
+     val hapticFeedback = LocalHapticFeedback.current
+     val scope = rememberCoroutineScope()
++    val snackbarHostState = remember { SnackbarHostState() }
++    var pushDiag by remember { mutableStateOf<WearableDiag?>(null) }
+     // 液态玻璃效果的透明下拉颜色
+     val liquidGlassDropdownColors = DropdownDefaults.dropdownColors(
+         containerColor = androidx.compose.ui.graphics.Color.Transparent,
+@@ -208,6 +226,7 @@ fun BackupAndMigrationScreen(
+         }
+     }
+ 
++    Box(modifier = Modifier.fillMaxSize()) {
+     Scaffold(
+         topBar = {}
+     ) { paddingValues ->
+@@ -217,6 +236,12 @@ fun BackupAndMigrationScreen(
+             snapshotFlow { listState.firstVisibleItemScrollOffset }
+                 .collect { offset -> listScrollY = offset }
+         }
++        LaunchedEffect(mode) {
++            if (mode == ScheduleDataManageMode.Export) {
++                pushDiag = wearableDiag()
++                onEnterExportScreen()
++            }
++        }
+         LazyColumn(
+             state = listState,
+             modifier = Modifier.fillMaxSize()
+@@ -500,19 +525,63 @@ fun BackupAndMigrationScreen(
+                                 title = BackupStr.exportToWearable(),
+                                 summary = BackupStr.exportToWearableSummary(),
+                                 onClick = {
++                                    var localPath: String? = null
+                                     scope.launch {
+-                                        val path = onExportToWearable(selectedExportSchedule)
+-                                        if (path != null) {
+-                                            showToast(BackupStr.wearableExportSuccessN(path), longDuration = true)
+-                                        } else {
+-                                            showToast(BackupStr.wearableExportFailed())
++                                    val resultPath = onExportToWearable(selectedExportSchedule) { ok, reason ->
++                                        val p = localPath
++                                        scope.launch {
++                                            when {
++                                                p == null -> snackbarHostState.showSnackbar(
++                                                    "导出失败：${reason.ifEmpty { "未知错误" }}",
++                                                    duration = SnackbarDuration.Long
++                                                )
++                                                ok -> snackbarHostState.showSnackbar(
++                                                    "课表已导出，推送成功\n本地文件：$p",
++                                                    duration = SnackbarDuration.Long
++                                                )
++                                                reason == "no-device" -> snackbarHostState.showSnackbar(
++                                                    "课表已导出到本地；未发现手环设备，请先安装手环端并连接\n本地文件：$p",
++                                                    duration = SnackbarDuration.Long
++                                                )
++                                                else -> snackbarHostState.showSnackbar(
++                                                    "课表已导出到本地；推送失败：${reason.ifEmpty { "未知错误" }}\n本地文件：$p",
++                                                    duration = SnackbarDuration.Long
++                                                )
++                                            }
++                                            pushDiag = wearableDiag()
++                                        }
++                                    }
++                                    localPath = resultPath
++                                    if (resultPath != null) {
++                                        scope.launch {
++                                            snackbarHostState.showSnackbar(
++                                                "课表已导出到本地，正在推送…",
++                                                duration = SnackbarDuration.Short
++                                            )
+                                         }
+                                     }
++                                    }
+                                 }
+                             )
+                         }
+                     }
+                 }
++                item {
++                    val diag = pushDiag
++                    Card(cornerRadius = 20.dp, modifier = Modifier.fillMaxWidth()) {
++                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
++                            Text("推送诊断", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface)
++                            if (diag == null) {
++                                Text("读取中…", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
++                            } else {
++                                Text("节点：" + (if (diag.nodeConnected) "在线" else "离线"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
++                                Text("互联权限：" + (if (diag.permissionGranted) "已授予" else "未授予"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("最近推送：" + (if (diag.lastPushOutcome.isEmpty()) "暂无记录" else diag.lastPushOutcome), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("排队队列：" + (if (diag.pendingQueued) "有课表待补推" else "无"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                            }
++                        }
++                    }
++                }
+             }
+ 
+             if (mode == ScheduleDataManageMode.Backup) {
+@@ -548,6 +617,12 @@ fun BackupAndMigrationScreen(
+         }
+     }
+ 
++        SnackbarHost(
++            state = snackbarHostState,
++            modifier = Modifier.align(Alignment.BottomCenter)
++        )
++    }
++
+     if (showImportConfirmDialog && pendingImportData != null) {
+         OverlayDialog(
+             title = BackupStr.importSchedule(),
