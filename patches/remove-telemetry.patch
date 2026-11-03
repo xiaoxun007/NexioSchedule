@@ -1,0 +1,26 @@
+diff --git a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
+index 61c98b13..8108d7ca 100644
+--- a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
++++ b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
+@@ -136,17 +136,15 @@ object StatsReporter {
+ 
+     /** 上报安装事件（仅每个设备首次上报，成功后才标记，避免重复/丢失） */
+     fun reportInstallOnce() {
+-        if (AppStorage.store(PREFS).getBoolean(KEY_INSTALL_REPORTED, false)) return
+-        CoroutineScope(ioDispatcher).launch { reportInstallOnceSuspending() }
++        // no-op: 不上报（fork 定制）
+     }
+ 
+     internal suspend fun reportActiveSuspending(): Boolean {
+-        val json = buildPayload("active")
+-        NexioLog.i(TAG, "上报 active: payload=$json")
+-        return postWithRetry(json)
++        // no-op: 不上报（fork 定制）
++        return false
+     }
+ 
+     fun reportActive() {
+-        CoroutineScope(ioDispatcher).launch { reportActiveSuspending() }
++        // no-op: 不上报（fork 定制）
+     }
+ }
