@@ -56,7 +56,7 @@ index 5070ede5..df8d700d 100644
  
                  TabletSettingsDest.LocalBackup -> LocalBackupScreen(
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
-index 9f45b478..367e0e34 100644
+index 9f45b478..6cae9af6 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
 @@ -5,6 +5,7 @@
@@ -217,7 +217,7 @@ index 9f45b478..367e0e34 100644
              }
  
              if (mode == ScheduleDataManageMode.Backup) {
-@@ -607,6 +677,11 @@ fun BackupAndMigrationScreen(
+@@ -607,6 +677,12 @@ fun BackupAndMigrationScreen(
          }
      )
  
@@ -225,27 +225,28 @@ index 9f45b478..367e0e34 100644
 +        state = snackbarHostState,
 +        modifier = Modifier.align(Alignment.BottomCenter)
 +    )
++    }
 +
      // 始终挂载、靠 show 驱动：避免 if 卸载导致关闭无退出动画
      OverlayDialog(
          title = BackupStr.shareCodeExport(),
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
-index 92829c9b..d7b08fd4 100644
+index 92829c9b..23620793 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
-@@ -788,7 +788,10 @@ fun BackupAndMigrationRoute(
+@@ -788,8 +788,10 @@ fun BackupAndMigrationRoute(
      -> Result<ThirdPartySharePayload> =
          { source, _ -> Result.failure(IllegalStateException(ChromeStr.platformUnsupported(source.displayName))) },
      onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
 -    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
-+onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
++    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
+     onSyncToCalendar: suspend (scheduleName: String) -> CalendarSyncResult = { CalendarSyncResult.Unsupported },
 +    wearableDiag: () -> com.haooz.chedule.ui.activities.WearableDiag? = { null },
 +    onEnterExportScreen: () -> Unit = {},
-+        onExportToWearable: suspend (scheduleName: String) -> String? = { null },
-     onSyncToCalendar: suspend (scheduleName: String) -> CalendarSyncResult = { CalendarSyncResult.Unsupported },
  ) {
      val title = when (mode) {
-@@ -810,7 +813,9 @@ fun BackupAndMigrationRoute(
+         ScheduleDataManageMode.Import -> ChromeStr.scheduleImport()
+@@ -810,7 +812,9 @@ fun BackupAndMigrationRoute(
              onImportThirdParty = onImportThirdParty,
              onShareSchedule = onShareSchedule,
              onExportToWearable = onExportToWearable,
