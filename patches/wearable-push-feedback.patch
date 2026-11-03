@@ -1,20 +1,21 @@
 diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
-index f1f4ba03..fa47fa94 100644
+index f1f4ba03..7f9f08ee 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
-@@ -304,6 +304,12 @@ private fun AndroidBackupAndMigrationRoute(router: AppRouter, mode: ScheduleData
+@@ -304,7 +304,12 @@ private fun AndroidBackupAndMigrationRoute(router: AppRouter, mode: ScheduleData
              )
          },
          // 手环推送
+-        onExportToWearable = { name -> WearableScheduleSync.exportToWearable(context, name) },
 +onExportToWearable = { name, onDone -> WearableScheduleSync.exportToWearable(context, name, onDone) },
 +        wearableDiag = {
 +            val d = com.haooz.chedule.wearable.WearableScheduleSync.getDiagnostics()
 +            com.haooz.chedule.ui.activities.WearableDiag(d.nodeConnected, d.lastResolveAt, d.permissionGranted, d.lastPushOutcome, d.lastPushAt, d.pendingQueued)
 +        },
 +        onEnterExportScreen = { com.haooz.chedule.wearable.WearableScheduleSync.launchWearScheduleApp(context) },
-         onExportToWearable = { name -> WearableScheduleSync.exportToWearable(context, name) },
          // 同步到日历（缺权限时点一下就申请）
          onSyncToCalendar = rememberCalendarSyncAction(),
+     )
 diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt b/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt
 index 5070ede5..df8d700d 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/ui/screens/AndroidSettingsScreen.kt
