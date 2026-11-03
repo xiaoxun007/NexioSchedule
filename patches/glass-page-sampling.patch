@@ -1,5 +1,5 @@
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
-index 84ed7767..510007ab 100644
+index 84ed7767..14b68d3e 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
 @@ -94,6 +94,7 @@ import com.haooz.chedule.viewmodel.SettingsViewModel
@@ -33,9 +33,9 @@ index 84ed7767..510007ab 100644
 -        if (useSharedWallpaper) sharedWallpaperBackdrop else null
 +    // fork 定制：页级单遍采样——SharedBlurBackdrop 预模糊壁纸层一次，所有卡片复用，消除每卡独立 blur pass
 +    val cardBackdrop: Backdrop? = remember(sharedWallpaperBackdrop, cardBlurRadius) {
-+        if (useSharedWallpaper && sharedWallpaperBackdrop != null) {
++        if (useSharedWallpaper && sharedWallpaperBackdrop is com.kyant.backdrop.backdrops.LayerBackdrop) {
 +            SharedBlurBackdrop(sharedWallpaperBackdrop)
-+        } else null
++        } else sharedWallpaperBackdrop
 +    }
      // 默认 15% 锚定当前观感（课程卡 0.45 / 格言卡 0.6），其余按百分比线性映射到 1
      val p = cardSurfaceAlpha.coerceIn(0f, 1f)
