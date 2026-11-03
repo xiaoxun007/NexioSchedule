@@ -102,6 +102,14 @@ jobs:
           git show master:patches/remove-telemetry.patch > /tmp/p6.patch
           git apply --3way /tmp/p6.patch || git apply /tmp/p6.patch
           grep -q "no-op: 不上报" core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt || { echo "❌ P6 telemetry 标记缺失"; exit 1; }
+          # P7: glass-page-sampling（页级单遍采样+SharedBlurBackdrop 预模糊）
+          git show master:patches/glass-page-sampling.patch > /tmp/p7.patch
+          git apply --3way /tmp/p7.patch || git apply /tmp/p7.patch
+          grep -q "SharedBlurBackdrop" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt || { echo "❌ P7 glass 标记缺失"; exit 1; }
+          # P8: remove-update-popup（禁用启动自动更新弹窗，保留设置页手动检查）
+          git show master:patches/remove-update-popup.patch > /tmp/p8.patch
+          git apply --3way /tmp/p8.patch || git apply /tmp/p8.patch
+          grep -q "fork 定制：禁用启动自动更新弹窗" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt || { echo "❌ P8 update-popup 标记缺失"; exit 1; }
           echo "✅ 全部补丁应用并验证通过"
           git status --short
 

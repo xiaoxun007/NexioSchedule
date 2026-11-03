@@ -1,0 +1,42 @@
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
+index 84ed7767..510007ab 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/today/TodayScreen.kt
+@@ -94,6 +94,7 @@ import com.haooz.chedule.viewmodel.SettingsViewModel
+ import com.kyant.backdrop.Backdrop
+ import com.kyant.backdrop.BackdropEffectScope
+ import com.kyant.backdrop.drawBackdrop
++import com.kyant.backdrop.backdrops.SharedBlurBackdrop
+ import com.kyant.backdrop.edgelight.edgeLight
+ import com.kyant.backdrop.effects.blur
+ import com.kyant.backdrop.effects.lens
+@@ -164,10 +165,12 @@ fun BlurCard(
+         // effects/onDrawSurface 必须 remember 稳定：内联 lambda 每次重组换引用，
+         // DrawBackdropElement.equals 会判不等并重建 RenderEffect，造成壁纸玻璃无意义重绘
+         val blurPx = with(LocalDensity.current) { remember(blurRadius) { blurRadius.dp.toPx() } }
++        val isSharedBlurred = wallpaperBackdrop is SharedBlurBackdrop
+         val glassEffects: BackdropEffectScope.() -> Unit =
+-            remember(refraction, blurPx) {
++            remember(refraction, blurPx, isSharedBlurred) {
+                 {
+-                    blur(blurPx)
++                    // fork 定制：SharedBlurBackdrop 已预模糊，跳过 per-card blur（页级单遍采样）
++                    if (!isSharedBlurred) blur(blurPx)
+                     if (refraction != CardRefractionLevel.OFF) {
+                         lens(refraction.lensRadiusDp.dp.toPx(), refraction.lensStrengthDp.dp.toPx())
+                     }
+@@ -524,8 +527,12 @@ fun TodayScreen(
+ 
+     // 卡片玻璃一律采主 pager 后的共享壁纸层：本页不自挂录制层（非共享壁纸路径已不存在）。
+     // 无材质档模糊/折射由 displayAppearance 钳 0，但卡片仍采壁纸（着色/不透明度照常生效）。
+-    val cardBackdrop: Backdrop? =
+-        if (useSharedWallpaper) sharedWallpaperBackdrop else null
++    // fork 定制：页级单遍采样——SharedBlurBackdrop 预模糊壁纸层一次，所有卡片复用，消除每卡独立 blur pass
++    val cardBackdrop: Backdrop? = remember(sharedWallpaperBackdrop, cardBlurRadius) {
++        if (useSharedWallpaper && sharedWallpaperBackdrop != null) {
++            SharedBlurBackdrop(sharedWallpaperBackdrop)
++        } else null
++    }
+     // 默认 15% 锚定当前观感（课程卡 0.45 / 格言卡 0.6），其余按百分比线性映射到 1
+     val p = cardSurfaceAlpha.coerceIn(0f, 1f)
+     fun anchorOpacity(anchor: Float): Float = if (p <= 0.15f) {

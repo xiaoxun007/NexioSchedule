@@ -1,0 +1,23 @@
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt
+index b1cd7115..cd4d0f17 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt
+@@ -1756,12 +1756,12 @@ internal fun CourseScheduleAppMainContent(
+                         liquidGlassBackdrop = overlayGlassBackdrop,
+                     )
+ 
+-                    // 更新能力（检查/下载/校验/安装）由宿主注入
+-                    UpdateDialog(
+-                        updateController = updateController ?: NoopUpdateController,
+-                        liquidGlassBackdrop = overlayGlassBackdrop,
+-                        onShowChanged = { updateDialogShowing = it },
+-                    )
++                    // fork 定制：禁用启动自动更新弹窗（保留设置页手动检查更新入口）
++                    // UpdateDialog(
++                    //     updateController = updateController ?: NoopUpdateController,
++                    //     liquidGlassBackdrop = overlayGlassBackdrop,
++                    //     onShowChanged = { updateDialogShowing = it },
++                    // )
+ 
+                     var jumpWeekTemp by remember { mutableIntStateOf(1) }
+                     val hapticFeedback = LocalHapticFeedback.current
