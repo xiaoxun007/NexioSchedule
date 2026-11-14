@@ -107,10 +107,11 @@ jobs:
           grep -q "no-op: 不上报" core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt || { echo "❌ P6 telemetry 标记缺失"; exit 1; }
           # P7: 已废弃——上游 3178d157/570ab540 等已把玻璃管线重写为壁纸模糊金字塔+shader，
           #     旧 SharedBlurBackdrop 页级采样路径不复存在；玻璃性能由上游方案接管，需真机验证卡顿。
-          # P8: remove-update-popup（禁用启动自动更新弹窗，保留设置页手动检查）
+          # P8: remove-update-popup（禁用启动自动更新弹窗；设置页手动检查保留，更新检测/下载指向本 fork 仓库）
           git show master:patches/remove-update-popup.patch > /tmp/p8.patch
           git apply --3way /tmp/p8.patch || git apply /tmp/p8.patch
           grep -q "fork 定制：禁用启动自动更新弹窗" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt || { echo "❌ P8 update-popup 标记缺失"; exit 1; }
+          grep -q "xiaoxun007/NexioSchedule" androidApp/src/main/java/com/haooz/chedule/ui/utils/UpdateChecker.kt || { echo "❌ P8 update 端点指向 fork 标记缺失"; exit 1; }
           echo "✅ 全部补丁应用并验证通过"
           git status --short
 
