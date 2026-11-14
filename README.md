@@ -57,13 +57,13 @@
 |---|---|
 | 视图 | 周视图 / 时间轴视图；时间轴是否按真实时长 |
 | 壁纸 | 选择 / 清除壁纸、壁纸亮度、壁纸模糊 |
-| 卡片效果 | 卡片着色程度、不透明度、模糊、折射；材质档支持「柔光玻璃」「清透磨砂」「无材质」，顶栏可切换「真·渐进模糊」 |
+| 卡片效果 | 卡片着色程度、不透明度、模糊、折射；材质档支持「无材质」「性能优先」 |
 | 卡片形状 | 课程卡片高度、圆角、内容对齐方式 |
 | 卡片文字 | 文字颜色、文字缩放比例、显示地点、显示教师 |
 | 分隔线 | 午休 / 晚休分界线开关 |
 | 默认主题 | 跟随应用 / 跟随系统 |
 
-底层用连续曲率圆角（Squircle）裁切，卡片与洞共用同一套轮廓；玻璃部分的模糊、折射、边缘高光由独立库 [softglass](https://github.com/HaoZai000/softglass) 实现。
+底层用连续曲率圆角（Squircle）裁切，卡片与洞共用同一套轮廓；玻璃部分的模糊、折射、边缘高光由本地 fork 的 backdrop 实现。
 
 ## 多课表与排班
 
@@ -86,7 +86,7 @@
 ## 备份与同步
 
 - **本地备份**：全部备份或单独备份某张课表到设备存储，带备份历史列表
-- **WebDAV 云同步**：配置后一键备份 / 恢复，可测试连接
+- **WebDAV 云备份**：配置后一键备份 / 恢复，可测试连接
 - **口令分享**：把课表编码成口令分享给他人，或从口令导入
 
 ## 课程提醒
@@ -97,7 +97,7 @@
 | 次日课程提醒 | 明天课程、首节时间、地点，附带「定闹钟」建议 |
 | 课中提醒 | 上课中展示距下课时间与课程状态；可选全程显示，或距下课 N 分钟开始显示 |
 
-- 可自动开启勿扰，档位分「完全勿扰 / 静音模式 / 勿扰模式」，下课后自动恢复
+- 可自动开启勿扰，档位分「完全勿扰 / 静音模式 / 勿扰模式」，下课后保持勿扰（需关闭请手动操作）
 - 小米超级岛与灵动岛两种岛区样式，可分别配置左右侧展示内容；关闭后回落为普通实时动态通知
 
 ## 桌面小部件
@@ -110,27 +110,25 @@
 
 设置页内置「添加到桌面」引导：长按桌面空白处 → 小部件 → 找到「Nexio课程表」并添加。
 
-开启应用偏好里的「莫奈取色」后，小部件的容器、卡片与文字配色跟随系统壁纸变化（Android 12+）。
-
 ## 设置一览
 
 设置页按四个分区组织，条目与应用内完全一致：
 
 | 分区 | 条目 |
 |---|---|
-| 基本设置 | 开始上课日期、当前周数、本学期总周数、智能显示周末、显示非本周课程、上课时间 |
+| 基本设置 | 开始上课日期、当前周数、本学期总周数、智能显示周末、显示非本周课程、课程时间管理 |
 | 特色功能 | 课程提醒、节假日与调休、桌面小部件、排班模式 |
-| 数据管理 | 应用个性化、导入导出、备份与同步 |
-| 其他操作 | 开启新学期、更新、关于应用、捐赠支持、问题反馈 |
+| 数据管理 | 课表导入、课表导出、课表备份 |
+| 其他操作 | 开启新学期、应用偏好设置、更新设置、关于应用 |
 
-平板端为双栏布局，左栏直接列出「学期与周次 / 文件口令导入 / AI 文本导入 / 教务系统导入 / 本地备份 / WebDAV 云同步 / 捐赠支持 / 问题反馈」等目的地。
+平板端为双栏布局，左栏直接列出「学期与周次 / 文件口令导入 / AI 文本导入 / 教务系统导入 / 本地备份 / WebDAV 云同步 / 捐赠支持 / 交流与反馈」等目的地。
 
 ## 视觉与动效
 
 - HyperOS 4 风格界面，组件基于 MiUiX
-- 液态玻璃：页面级采样层录制 + 模糊 / 折射 / 边缘光，覆盖顶栏、底栏、按钮、下拉菜单与弹窗
+- 液态玻璃：页面级 backdrop 录制 + 模糊 / 折射 / 边缘光，覆盖顶栏、底栏、按钮、下拉菜单与弹窗
 - 连续曲率圆角与屏幕圆角裁切；开洞、morph、翻周各有独立时序
-- 莫奈取色：页面背景、日期高亮与课程卡片跟随系统壁纸动态配色（Android 12+，可在应用个性化中关闭，关闭后恢复课程自定义颜色）
+- 莫奈取色：页面背景、日期高亮与课程卡片跟随系统壁纸动态配色（Android 12+，可在应用偏好设置中关闭，关闭后恢复课程自定义颜色）
 - 主题图标：提供透明单色图标层，支持 Android 13+ 的主题图标启动器
 
 ## 技术栈
@@ -143,15 +141,16 @@
 | UI | Jetpack Compose（BOM）+ Material3 | `2026.05.01` / `1.5.0-alpha19` |
 | 跨端 | Compose Multiplatform | `1.12.0` |
 | 组件库 | [MiUiX](https://github.com/compose-miuix-ui/miuix)（含 Navigation3） | `0.9.4` / `0.9.3` |
+| 圆角形状 | [Kyant Shapes](https://github.com/Kyant0/kyant-shapes) | `1.2.1` |
 | 本地数据 | SQLDelight（SQLite，单库 `nexio.db`） | `2.3.2` |
 | 网络 / 序列化 | OkHttp / Gson | `4.12.0` / `2.11.0` |
 | 系统特权 | Shizuku（岛区通知） | `13.1.5` |
-| 柔光玻璃 | [softglass](https://github.com/HaoZai000/softglass)（独立仓库，JitPack） | `0.1.1` |
+| 液态玻璃 | 本地 fork 的 backdrop | — |
 | Android SDK | compile / target / min | `37` / `37` / `26` |
 
 ## 工程结构
 
-五个 Gradle 模块加一个 Xcode 工程：
+单一仓库，六个 Gradle 模块加一个 Xcode 工程：
 
 ```
 NexioSchedule/
@@ -160,12 +159,11 @@ NexioSchedule/
 ├── desktopApp/     桌面宿主（Compose Desktop / JVM）
 ├── ui-shared/      共享 UI：页面、组件、主题、动效、i18n（android + jvm + ios）
 ├── core/           共享数据层：SQLDelight、仓库、导入导出、WebDAV
-└── miuix/          MiUiX 组件的本地扩展
+├── miuix/          MiUiX 组件的本地扩展
+└── backdrop/       液态玻璃（fork）
 ```
 
 `ui-shared` 与 `core` 的 `commonMain` 里不写平台类型，平台差异走 `expect / actual`；数据只有一份 SQLite 库（`nexio.db`），设置项、课表、课程、作息都在同一个库里。
-
-柔光玻璃库 softglass 不在本仓库：本地存在 `../softglass` 时用复合构建编源码，否则走 JitPack 制品。
 
 ## 构建
 
@@ -186,9 +184,11 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 | 项目 | 作者 |
 |---|---|
 | [Miuix](https://github.com/compose-miuix-ui/miuix) | Yukonga |
+| [Capsule](https://github.com/Kyant0/Capsule) | Kyant0 |
 | [OkHttp](https://github.com/square/okhttp) | Square |
 | [warehouse](https://github.com/XingHeYuZhuan/shiguang_warehouse) | XingHeYuZhuan |
 | [Shizuku](https://github.com/RikkaApps/Shizuku) | RikkaApps |
+| [Backdrop](https://github.com/Kyant0/AndroidLiquidGlass) | Kyant0 |
 
 ## 开源协议
 
