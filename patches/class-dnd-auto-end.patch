@@ -1,0 +1,56 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+index c9c0037d..bf423906 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+@@ -497,8 +497,7 @@ object ClassDndHelper {
+             return
+         }
+         if (!isInClass(context)) {
+-            if (handleManualHold(context)) return
+-            handBack(context, requireConsistency = true)
++            // fork 定制：下课保持勿扰不自动恢复（不再 handBack 还原课前状态；需关闭请手动点通知/超级岛按钮）
+             return
+         }
+         val mode = currentMode(context)
+@@ -561,7 +560,7 @@ object ClassDndHelper {
+             return
+         }
+         prefs(context).edit { putBoolean(KEY_TEMP, true) }
+-        markManual(context, !inClass)
++        markManual(context, true)
+ 
+         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+         scheduleClassDndAlarms(context, alarmManager)
+@@ -600,18 +599,13 @@ object ClassDndHelper {
+             val endMillis = if (parsedEnd <= startMillis) parsedEnd + DAY_MS else parsedEnd
+ 
+             val startRc = courseRc(RC_DND_START_BASE, course.id)
+-            val endRc = courseRc(RC_DND_END_BASE, course.id)
+             scheduleOne(context, alarmManager, startRc, ClassDndReceiver.ACTION_CLASS_START, startMillis)
+-            scheduleOne(context, alarmManager, endRc, ClassDndReceiver.ACTION_CLASS_END, endMillis)
+             rcs += startRc
+-            rcs += endRc
+         }
+ 
+-        testClassWindow(context)?.let { (start, end) ->
++        testClassWindow(context)?.let { (start, _) ->
+             scheduleOne(context, alarmManager, RC_DND_TEST_START, ClassDndReceiver.ACTION_CLASS_START, start)
+-            scheduleOne(context, alarmManager, RC_DND_TEST_END, ClassDndReceiver.ACTION_CLASS_END, end)
+             rcs += RC_DND_TEST_START
+-            rcs += RC_DND_TEST_END
+         }
+ 
+         val heldEnd = prefs(context).getLong(KEY_CLASS_END_AT, 0L)
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
+index cd4f0f5f..ea6d9811 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
+@@ -43,7 +43,7 @@ object ReminderStr {
+     val autoDndNeedsPermission =
+         L("需要先授予勿扰权限才能自动开启勿扰", "Grant Do Not Disturb access first to turn this on")
+     val autoDndSummary =
+-        L("上课时自动开启勿扰，下课后自动恢复", "Turns on Do Not Disturb during class and restores it after class")
++        L("上课时自动开启勿扰，下课后保持勿扰", "Turns on Do Not Disturb during class; keeps it on after class")
+     val dndModeNeedsPermission =
+         L("该档位需要勿扰权限，已为你打开授权页", "This level needs Do Not Disturb access; the permission page has been opened")
+     val dndModeTitle = L("勿扰模式档位", "Do Not Disturb Level")

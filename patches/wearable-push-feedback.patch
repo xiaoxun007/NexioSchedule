@@ -1,0 +1,218 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+index 28192d58..25c013a3 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+@@ -316,7 +316,12 @@ private fun AndroidBackupAndMigrationRoute(
+             )
+         },
+         // 手环推送
+-        onExportToWearable = { name -> WearableScheduleSync.exportToWearable(context, name) },
++        onExportToWearable = { name, onDone -> WearableScheduleSync.exportToWearable(context, name, onDone) },
++        wearableDiag = {
++            val d = com.haooz.chedule.wearable.WearableScheduleSync.getDiagnostics()
++            com.haooz.chedule.ui.activities.WearableDiag(d.nodeConnected, d.lastResolveAt, d.permissionGranted, d.lastPushOutcome, d.lastPushAt, d.pendingQueued)
++        },
++        onEnterExportScreen = { com.haooz.chedule.wearable.WearableScheduleSync.launchWearScheduleApp(context) },
+         // 手表蓝牙推送（扫描 + 分片写入）
+         watchSyncController = rememberWatchSyncController(),
+         // 同步到日历（缺权限时点一下就申请）
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+index ab384055..deb02b1f 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.PaddingValues
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.lazy.LazyColumn
+@@ -27,6 +28,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
+ import androidx.compose.ui.platform.LocalHapticFeedback
+ import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
+ import com.haooz.chedule.data.backup.NoopScheduleFileController
+ import com.haooz.chedule.data.backup.ScheduleFileController
+ import com.haooz.chedule.data.backup.encodeBackupJson
+@@ -81,6 +83,9 @@ import top.yukonga.miuix.kmp.basic.DropdownEntry
+ import top.yukonga.miuix.kmp.basic.DropdownItem
+ import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
+ import top.yukonga.miuix.kmp.basic.Scaffold
++import top.yukonga.miuix.kmp.basic.SnackbarDuration
++import top.yukonga.miuix.kmp.basic.SnackbarHost
++import top.yukonga.miuix.kmp.basic.SnackbarHostState
+ import top.yukonga.miuix.kmp.basic.SmallTitle
+ import top.yukonga.miuix.kmp.basic.TextButton
+ import top.yukonga.miuix.kmp.layout.CollapsibleTopAppBarDefaults
+@@ -99,6 +104,15 @@ enum class ScheduleDataManageMode {
+     Export,
+ }
+ 
++data class WearableDiag(
++    val nodeConnected: Boolean,
++    val lastResolveAt: Long,
++    val permissionGranted: Boolean,
++    val lastPushOutcome: String,
++    val lastPushAt: Long,
++    val pendingQueued: Boolean,
++)
++
+ /** 课表导入 / 导出 / 备份页面；由 [mode] 决定展示内容，入口页共用。 */
+ @Composable
+ fun BackupAndMigrationScreen(
+@@ -126,11 +140,13 @@ fun BackupAndMigrationScreen(
+     /** 口令分享导出（上传 + 出图 + 系统分享，Android 专有，宿主注入）。 */
+     onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
+     /** 导出到手环（Android 专有；未连接/不支持时返回 null） */
+-    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
++    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
+     /** 导出到手表（蓝牙）：扫描 + 分片推送，宿主注入；未注入的平台走占位实现 */
+     watchSyncController: WatchSyncController = NoopWatchSyncController,
+     /** 同步到系统日历（Android 专有；未实现的平台保持默认值 → 点按只提示不支持） */
+     onSyncToCalendar: suspend (scheduleName: String) -> CalendarSyncResult = { CalendarSyncResult.Unsupported },
++    wearableDiag: () -> WearableDiag? = { null },
++    onEnterExportScreen: () -> Unit = {},
+     /** 是否展示「口令分享导出」（需要出图 + 系统分享能力）。 */
+     showShareCodeExport: Boolean = true,
+     /** 是否展示「同步到日历」（需要系统日历写入能力）。 */
+@@ -175,6 +191,8 @@ fun BackupAndMigrationScreen(
+     var isSharingExport by remember { mutableStateOf(false) }
+     // 导出到手表：面板常驻挂载（靠 show 驱动），发送途中切走也不会中断传输
+     var showWatchSyncSheet by remember { mutableStateOf(false) }
++    val snackbarHostState = remember { SnackbarHostState() }
++    var pushDiag by remember { mutableStateOf<WearableDiag?>(null) }
+ 
+     /** 选一个 JSON 备份/课表文件读入；控制器已按原文案处理取消与读取失败 */
+     fun pickJsonFile() {
+@@ -214,6 +232,7 @@ fun BackupAndMigrationScreen(
+         }
+     }
+ 
++    Box(modifier = Modifier.fillMaxSize()) {
+     Scaffold(
+         topBar = {}
+     ) { paddingValues ->
+@@ -223,6 +242,12 @@ fun BackupAndMigrationScreen(
+             snapshotFlow { listState.firstVisibleItemScrollOffset }
+                 .collect { offset -> listScrollY = offset }
+         }
++        LaunchedEffect(mode) {
++            if (mode == ScheduleDataManageMode.Export) {
++                pushDiag = wearableDiag()
++                onEnterExportScreen()
++            }
++        }
+         LazyColumn(
+             state = listState,
+             modifier = Modifier.fillMaxSize()
+@@ -538,12 +563,40 @@ fun BackupAndMigrationScreen(
+                                         title = BackupStr.exportToWearable(),
+                                         summary = BackupStr.exportToWearableSummary(),
+                                         onClick = {
++                                            var localPath: String? = null
+                                             scope.launch {
+-                                                val path = onExportToWearable(selectedExportSchedule)
+-                                                if (path != null) {
+-                                                    showToast(BackupStr.wearableExportSuccessN(path), longDuration = true)
+-                                                } else {
+-                                                    showToast(BackupStr.wearableExportFailed())
++                                                val resultPath = onExportToWearable(selectedExportSchedule) { ok, reason ->
++                                                    val p = localPath
++                                                    scope.launch {
++                                                        when {
++                                                            p == null -> snackbarHostState.showSnackbar(
++                                                                "导出失败：${reason.ifEmpty { "未知错误" }}",
++                                                                duration = SnackbarDuration.Long
++                                                            )
++                                                            ok -> snackbarHostState.showSnackbar(
++                                                                "课表已导出，推送成功\n本地文件：$p",
++                                                                duration = SnackbarDuration.Long
++                                                            )
++                                                            reason == "no-device" -> snackbarHostState.showSnackbar(
++                                                                "课表已导出到本地；未发现手环设备，请先安装手环端并连接\n本地文件：$p",
++                                                                duration = SnackbarDuration.Long
++                                                            )
++                                                            else -> snackbarHostState.showSnackbar(
++                                                                "课表已导出到本地；推送失败：${reason.ifEmpty { "未知错误" }}\n本地文件：$p",
++                                                                duration = SnackbarDuration.Long
++                                                            )
++                                                        }
++                                                        pushDiag = wearableDiag()
++                                                    }
++                                                }
++                                                localPath = resultPath
++                                                if (resultPath != null) {
++                                                    scope.launch {
++                                                        snackbarHostState.showSnackbar(
++                                                            "课表已导出到本地，正在推送…",
++                                                            duration = SnackbarDuration.Short
++                                                        )
++                                                    }
+                                                 }
+                                             }
+                                         }
+@@ -566,11 +619,36 @@ fun BackupAndMigrationScreen(
+                         }
+                     }
+                 }
++                item {
++                    val diag = pushDiag
++                    Card(
++                        modifier = Modifier.fillMaxWidth(),
++                        insideMargin = PaddingValues(0.dp)
++                    ) {
++                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
++                            Text("推送诊断", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface)
++                            if (diag == null) {
++                                Text("读取中…", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
++                            } else {
++                                Text("节点：" + (if (diag.nodeConnected) "在线" else "离线"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 6.dp))
++                                Text("互联权限：" + (if (diag.permissionGranted) "已授予" else "未授予"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("最近推送：" + (if (diag.lastPushOutcome.isEmpty()) "暂无记录" else diag.lastPushOutcome), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                                Text("排队队列：" + (if (diag.pendingQueued) "有课表待补推" else "无"), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(top = 4.dp))
++                            }
++                        }
++                    }
++                }
+             }
+ 
+         }
+     }
+ 
++    SnackbarHost(
++        state = snackbarHostState,
++        modifier = Modifier.align(Alignment.BottomCenter)
++    )
++    }
++
+     // 撞名时弹窗自己改成「覆盖」口径：口令同步同一张表必然撞名，不能只给一句「已存在」
+     ScheduleImportConfirmDialog(
+         show = showImportConfirmDialog && pendingImportData != null,
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
+index 141f6f55..a38a40e5 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
+@@ -1424,9 +1424,11 @@ fun BackupAndMigrationRoute(
+     -> Result<ThirdPartySharePayload> =
+         { source, _ -> Result.failure(IllegalStateException(ChromeStr.platformUnsupported(source.displayName))) },
+     onShareSchedule: (scheduleName: String, onSharingChanged: (Boolean) -> Unit) -> Unit = { _, _ -> },
+-    onExportToWearable: suspend (scheduleName: String) -> String? = { null },
++    onExportToWearable: suspend (scheduleName: String, onDone: ((Boolean, String) -> Unit)?) -> String? = { _, _ -> null },
+     watchSyncController: WatchSyncController = NoopWatchSyncController,
+     onSyncToCalendar: suspend (scheduleName: String) -> CalendarSyncResult = { CalendarSyncResult.Unsupported },
++    wearableDiag: () -> com.haooz.chedule.ui.activities.WearableDiag? = { null },
++    onEnterExportScreen: () -> Unit = {},
+     showShareCodeExport: Boolean = true,
+     showCalendarSync: Boolean = true,
+     showWearableExport: Boolean = true,
+@@ -1482,6 +1484,8 @@ fun BackupAndMigrationRoute(
+                 onExportToWearable = onExportToWearable,
+                 watchSyncController = watchSyncController,
+                 onSyncToCalendar = onSyncToCalendar,
++                wearableDiag = wearableDiag,
++                onEnterExportScreen = onEnterExportScreen,
+                 showShareCodeExport = showShareCodeExport,
+                 showCalendarSync = showCalendarSync,
+                 showWearableExport = showWearableExport,
