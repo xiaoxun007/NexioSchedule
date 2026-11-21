@@ -1,19 +1,17 @@
 # 同步上游并构建 Release APK
 #
 # 功能：
-# 1. 每隔 2 天凌晨 3 点检查上游 HaoZai000/NexioSchedule 是否有新提交
-# 2. 有更新时：将 fork 的 master 同步到上游最新，并重新应用「下课自动关闭可选」功能补丁
+# 1. 手动触发时检查上游 HaoZai000/NexioSchedule 是否有新提交（已停用定时 cron 自动同步）
+# 2. 有更新时：将 fork 的 master 同步到上游最新，并重新应用本 fork 功能补丁
 # 3. 构建 R8 优化后的 release APK（调试密钥签名，可直接安装）
 # 4. 上传构建产物 + 发布 GitHub Release
 #
-# 首次部署后请在 Actions 页面手动 Run workflow 一次，生成第一个 APK。
+# 触发方式：仅 GitHub Actions 页面手动 Run workflow（workflow_dispatch）；不再有定时自动同步/构建/发版。
 
 name: 同步上游并构建 Release APK
 
 "on":
-  schedule:
-    - cron: '0 3 */2 * *'         # 每隔 2 天凌晨 3 点检查上游是否有新提交
-  workflow_dispatch: {}          # 支持手动触发
+  workflow_dispatch: {}          # 仅手动触发（已移除 schedule cron 自动同步/自动构建发布）
 
 permissions:
   contents: write
@@ -92,11 +90,11 @@ jobs:
           git apply --3way /tmp/p2.patch || git apply /tmp/p2.patch
           grep -q "inFlightSentAt" "$WS" || { echo "❌ P2 stability sentAt 标记缺失"; exit 1; }
           grep -q "ack timeout" "$WS" || { echo "❌ P2 stability ack timeout 标记缺失"; exit 1; }
-          # P3: feedback（Snackbar 四态 + manualOutcome 回调）
+          # P3: feedback（上游 miuix→NexioUI 迁移后改用平台 Toast 四态 + manualOutcome 回调 + 互联权限引导）
           git show master:patches/wearable-push-feedback.patch > /tmp/p3.patch
           git apply --3way /tmp/p3.patch || git apply /tmp/p3.patch
           grep -q "manualOutcome" "$WS" || { echo "❌ P3 feedback manualOutcome 标记缺失"; exit 1; }
-          grep -q "SnackbarHostState" "$UI" || { echo "❌ P3 feedback Snackbar 标记缺失"; exit 1; }
+          grep -q "wearableDiag" "$UI" || { echo "❌ P3 feedback 诊断面板标记缺失"; exit 1; }
           # P4: diagnostics 标记已并入 P2（PushDiagnostics 数据类在 WearableScheduleSync.kt）
           grep -q "PushDiagnostics" "$WS" || { echo "❌ P4 diagnostics 标记缺失"; exit 1; }
           # P5: launch-app（空占位，launchWearScheduleApp 已并入 P2/P3）
@@ -223,7 +221,7 @@ jobs:
                  - 改动：`ClassDndHelper.kt`、`ReminderStr.kt`
               2. **手环推送稳定性 + 反馈**
                  - 发送后等待 ACK，超时按 1s/2s 退避重试（最多 2 次），CAS 防并发重复推送
-                 - 导出页四态 Snackbar 反馈 + 推送诊断面板；进入导出页尝试拉起手环端 App
+                 - 导出页四态 Toast 反馈 + 推送诊断面板；未授予互联权限时引导跳转系统设置 / 小米运动健康；进入导出页尝试拉起手环端 App
                  - 改动：`WearableScheduleSync.kt`、`BackupAndMigrationScreen.kt`、路由层
               3. **移除统计上报**
                  - 安装/活跃上报在 `StatsReporter` 置为 no-op，不再向统计服务发请求（保留设备 ID 生成）

@@ -1,5 +1,5 @@
 diff --git a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
-index c9c0037d..bf423906 100644
+index e636b1c3..7ed1839a 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
 @@ -497,8 +497,7 @@ object ClassDndHelper {
@@ -42,10 +42,10 @@ index c9c0037d..bf423906 100644
  
          val heldEnd = prefs(context).getLong(KEY_CLASS_END_AT, 0L)
 diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
-index cd4f0f5f..ea6d9811 100644
+index 92211875..b9aec991 100644
 --- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
 +++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/i18n/ReminderStr.kt
-@@ -43,7 +43,7 @@ object ReminderStr {
+@@ -46,7 +46,7 @@ object ReminderStr {
      val autoDndNeedsPermission =
          L("需要先授予勿扰权限才能自动开启勿扰", "Grant Do Not Disturb access first to turn this on")
      val autoDndSummary =
