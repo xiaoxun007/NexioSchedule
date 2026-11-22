@@ -1,0 +1,122 @@
+diff --git a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/ApiEndpoints.kt b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/ApiEndpoints.kt
+index 8b3983f1..878f4172 100644
+--- a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/ApiEndpoints.kt
++++ b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/ApiEndpoints.kt
+@@ -4,7 +4,7 @@ package com.haooz.chedule.data.platform
+ object ApiEndpoints {
+     const val BASE = "https://nexioschedule.icu"
+ 
+-    const val STATS_REPORT = "$BASE/api/stats/report"
++    // fork 定制：STATS_REPORT 统计上报端点已移除（见 remove-telemetry.patch），dex 内不再出现该上报路径
+     const val NOTICE = "$BASE/api/notice"
+     const val APPRECIATIONS = "$BASE/api/appreciations"
+     const val APPRECIATIONS_TOP = "$BASE/api/appreciations/top"
+diff --git a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
+index a52f2c4b..790cf1eb 100644
+--- a/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
++++ b/core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt
+@@ -1,12 +1,8 @@
+ package com.haooz.chedule.data.platform
+ 
+-import com.haooz.chedule.data.storage.AppStorage
+ import com.haooz.chedule.data.util.jsonObjectOf
+ import kotlin.concurrent.Volatile
+ import kotlin.time.Clock
+-import kotlinx.coroutines.CoroutineScope
+-import kotlinx.coroutines.delay
+-import kotlinx.coroutines.launch
+ 
+ /**
+  * 匿名统计上报。
+@@ -16,16 +12,11 @@ import kotlinx.coroutines.launch
+  */
+ object StatsReporter {
+     private const val TAG = "StatsReporter"
+-    // 统一走域名 HTTPS，不再直连
+-    private const val API_URL = ApiEndpoints.STATS_REPORT
+-    // 弱网下偶发连接失败，最多重试 3 次（带指数退避）
+-    private const val MAX_RETRY = 3
+ 
+-    private const val PREFS = "stats_prefs"
+-    private const val KEY_INSTALL_REPORTED = "install_reported"
+-
+-    // 超时 connect 10s / read 10s / call 15s
+-    /** 可替换（`internal var`）以便 commonTest 注入 FakeHttpService，覆盖重试/退避分支。 */
++    // fork 定制：统计上报已整体禁用。不再保留上报端点常量（ApiEndpoints.STATS_REPORT 已删除），
++    // 安装/活跃上报入口与挂起实现全部 no-op，不会向统计服务发起任何请求。
++    // 保留 `http` 仅为兼容既有测试注入接口；生产路径不可达。
++    /** 可替换（`internal var`）以便 commonTest 注入 FakeHttpService。 */
+     internal var http: HttpService = createHttpService(
+         HttpTimeouts(connectSeconds = 10, readSeconds = 10, callSeconds = 15),
+     )
+@@ -94,61 +85,32 @@ object StatsReporter {
+     }
+ 
+     /**
+-     * 带退避的执行一次上报。返回 true 表示成功。
+-     * 网络抖动（IO 异常、非 2xx）时重试，指数退避：1s、2s、4s。
++     * fork 定制：上报网络出口已禁用。保留签名仅为兼容既有测试注入；不再发起任何 HTTP 请求，恒返回 false。
+      */
+     internal suspend fun postWithRetry(json: String): Boolean {
+-        var last: Exception? = null
+-        repeat(MAX_RETRY) { attempt ->
+-            try {
+-                val resp = http.post(API_URL, json)
+-                NexioLog.i(
+-                    TAG,
+-                    "上报响应(${attempt + 1}/$MAX_RETRY): code=${resp.code} successful=${resp.isSuccessful}",
+-                )
+-                if (resp.isSuccessful) return true
+-                last = IllegalStateException("HTTP ${resp.code}")
+-            } catch (e: Exception) {
+-                last = e
+-                NexioLog.w(TAG, "上报失败(第${attempt + 1}次): ${e.message}")
+-            }
+-            if (attempt < MAX_RETRY - 1) delay((1L shl attempt) * 1000L)
+-        }
+-        NexioLog.e(TAG, "上报重试 $MAX_RETRY 次后仍失败", last)
++        // no-op: 不上报（fork 定制）
+         return false
+     }
+ 
+     /**
+-     * 上报安装事件的实际逻辑（可挂起、可测）。
+-     *
+-     * ⚠ 只有上报成功才落盘标记，否则下次启动会重试 —— 反过来（先标记后上报）会永久丢失安装量。
+-     *
+-     * @return 是否成功上报
++     * fork 定制：安装事件上报实际逻辑同样禁用，不落盘已上报标记、不组装/发送上报负载。
+      */
+     internal suspend fun reportInstallOnceSuspending(): Boolean {
+-        val prefs = AppStorage.store(PREFS)
+-        if (prefs.getBoolean(KEY_INSTALL_REPORTED, false)) return false
+-
+-        val json = buildPayload("install")
+-        NexioLog.i(TAG, "上报 install: payload=$json")
+-        val ok = postWithRetry(json)
+-        if (ok) prefs.edit { putBoolean(KEY_INSTALL_REPORTED, true) }
+-        return ok
++        // no-op: 不上报（fork 定制）
++        return false
+     }
+ 
+     /** 上报安装事件（仅每个设备首次上报，成功后才标记，避免重复/丢失） */
+     fun reportInstallOnce() {
+-        if (AppStorage.store(PREFS).getBoolean(KEY_INSTALL_REPORTED, false)) return
+-        CoroutineScope(ioDispatcher).launch { reportInstallOnceSuspending() }
++        // no-op: 不上报（fork 定制）
+     }
+ 
+     internal suspend fun reportActiveSuspending(): Boolean {
+-        val json = buildPayload("active")
+-        NexioLog.i(TAG, "上报 active: payload=$json")
+-        return postWithRetry(json)
++        // no-op: 不上报（fork 定制）
++        return false
+     }
+ 
+     fun reportActive() {
+-        CoroutineScope(ioDispatcher).launch { reportActiveSuspending() }
++        // no-op: 不上报（fork 定制）
+     }
+ }

@@ -1,0 +1,251 @@
+# 同步上游并构建 Release APK
+#
+# 功能：
+# 1. 手动触发时检查上游 HaoZai000/NexioSchedule 是否有新提交（已停用定时 cron 自动同步）
+# 2. 有更新时：将 fork 的 master 同步到上游最新，并重新应用本 fork 功能补丁
+# 3. 构建 R8 优化后的 release APK（调试密钥签名，可直接安装）
+# 4. 上传构建产物 + 发布 GitHub Release
+#
+# 触发方式：仅 GitHub Actions 页面手动 Run workflow（workflow_dispatch）；不再有定时自动同步/构建/发版。
+
+name: 同步上游并构建 Release APK
+
+"on":
+  workflow_dispatch: {}          # 仅手动触发（已移除 schedule cron 自动同步/自动构建发布）
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库（含完整历史）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 git 并拉取上游
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/HaoZai000/NexioSchedule.git
+          git fetch upstream master
+
+      - name: 判断上游是否有新提交
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            echo "✅ 当前已是最新上游"
+          else
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=$(git rev-parse --short upstream/master)" >> "$GITHUB_OUTPUT"
+            echo "🔄 检测到上游新提交 $(git rev-parse --short upstream/master)"
+          fi
+
+      - name: 同步 fork 代码到上游最新
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          # 先保存 fork 特有文件（补丁/签名/本 workflow/README），reset 对齐上游后再恢复
+          mkdir -p /tmp/keep
+          cp -r patches signing /tmp/keep/ 2>/dev/null || true
+          cp .github/workflows/sync-upstream-build-release.yml /tmp/keep/ 2>/dev/null || true
+          cp README.md /tmp/keep/ 2>/dev/null || true
+          # fork master 完全对齐上游（force reset），避免 merge 冲突（上游会增删 badges 等自动文件）
+          git reset --hard upstream/master
+          # 恢复 fork 特有文件并提交
+          mkdir -p patches signing .github/workflows
+          cp -r /tmp/keep/patches/* patches/ 2>/dev/null || true
+          cp -r /tmp/keep/signing/* signing/ 2>/dev/null || true
+          cp /tmp/keep/sync-upstream-build-release.yml .github/workflows/ 2>/dev/null || true
+          cp /tmp/keep/README.md ./README.md 2>/dev/null || true
+          # GITHUB_TOKEN 无权在提交中新增/更新其他 workflow 文件（remote rejected）：
+          # 删除上游带入的 ci.yml 等非本 fork 工作流；自有同步工作流 blob 与远程一致、diff 为空，保留不触发拒绝
+          find .github/workflows -type f ! -name 'sync-upstream-build-release.yml' -delete
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "sync: 对齐上游 $(git rev-parse --short upstream/master) 并保留补丁/签名" --no-verify || true
+          # fork master = 上游最新 + 特有文件，历史由本 workflow 全权管理，force push 覆盖旧提交
+          git push --force origin master
+
+      - name: 从上游最新代码构建（应用功能补丁）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -e
+          git checkout -B build-snapshot upstream/master
+          mkdir -p signing
+          git show master:signing/debug.keystore.b64 > signing/debug.keystore.b64
+          WS=androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+          UI=ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+          DND=androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
+          # P1: class-dnd（下课保持勿扰，不自动恢复）
+          git show master:patches/class-dnd-auto-end.patch > /tmp/p1.patch
+          git apply --3way /tmp/p1.patch || git apply /tmp/p1.patch
+          grep -q "不自动恢复" "$DND" || { echo "❌ P1 class-dnd 标记缺失"; exit 1; }
+          # P2（已退役）：旧 wearable-sync-stability.patch 与上游 PR #116 重写后的推送链路冲突，
+          #     不再重放；其 ACK 观测/诊断快照/手动回调职责由 P9（nexio-push-diag-node-select）承接。
+          # P3: feedback（平台 Toast 四态 + 互联权限引导 + 诊断面板入口）
+          git show master:patches/wearable-push-feedback.patch > /tmp/p3.patch
+          git apply --3way /tmp/p3.patch || git apply /tmp/p3.patch
+          grep -q "wearableDiag" "$UI" || { echo "❌ P3 feedback 诊断面板标记缺失"; exit 1; }
+          # P6: remove-telemetry（StatsReporter no-op，保留 ensureDeviceId）
+          git show master:patches/remove-telemetry.patch > /tmp/p6.patch
+          git apply --3way /tmp/p6.patch || git apply /tmp/p6.patch
+          grep -q "no-op: 不上报" core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt || { echo "❌ P6 telemetry 标记缺失"; exit 1; }
+          # P7: 已废弃——上游 3178d157/570ab540 等已把玻璃管线重写为壁纸模糊金字塔+shader，
+          #     旧 SharedBlurBackdrop 页级采样路径不复存在；玻璃性能由上游方案接管，需真机验证卡顿。
+          # P8: remove-update-popup（禁用启动自动更新弹窗；设置页手动检查保留，更新检测/下载指向本 fork 仓库）
+          git show master:patches/remove-update-popup.patch > /tmp/p8.patch
+          git apply --3way /tmp/p8.patch || git apply /tmp/p8.patch
+          grep -q "fork 定制：禁用启动自动更新弹窗" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt || { echo "❌ P8 update-popup 标记缺失"; exit 1; }
+          grep -q "xiaoxun007/NexioSchedule" androidApp/src/main/java/com/haooz/chedule/ui/utils/UpdateChecker.kt || { echo "❌ P8 update 端点指向 fork 标记缺失"; exit 1; }
+          # P9: diag + node-select（诊断快照全量节点/选中节点/预检/发送态/ACK 观测；发送前强制刷新 + 按名匹配 + 预检阻断 + 分级文案）
+          git show master:patches/nexio-push-diag-node-select.patch > /tmp/p9.patch
+          git apply --3way /tmp/p9.patch || git apply /tmp/p9.patch
+          grep -q "PushDiagnostics" "$WS" || { echo "❌ P9 diagnostics 快照标记缺失"; exit 1; }
+          grep -q "getDiagnostics" "$WS" || { echo "❌ P9 getDiagnostics 标记缺失"; exit 1; }
+          grep -q "manualOutcome" "$WS" || { echo "❌ P9 manualOutcome 标记缺失"; exit 1; }
+          grep -q "inFlightSentAt" "$WS" || { echo "❌ P9 sentAt 标记缺失"; exit 1; }
+          grep -q "ack timeout" "$WS" || { echo "❌ P9 ack timeout 标记缺失"; exit 1; }
+          grep -q "对端应用未被识别" "$WS" || { echo "❌ P9 预检分级文案标记缺失"; exit 1; }
+          grep -q "DiagRow" "$UI" || { echo "❌ P9 诊断面板行组件标记缺失"; exit 1; }
+          grep -q "WearableDiagNode" "$UI" || { echo "❌ P9 节点列表数据结构标记缺失"; exit 1; }
+          echo "✅ 全部补丁应用并验证通过"
+          git status --short
+
+      - name: 设置 JDK 25（KMP 要求）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: 安装 Android SDK 组件（platform 37）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+
+      - name: 构建 Release APK（R8 优化，fork 版本号）
+        id: build
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x gradlew
+          BUILD_GRADLE=androidApp/build.gradle.kts
+          VNAME=$(grep -oP 'versionName = "\K[^"]+' "$BUILD_GRADLE")
+          MAINVER=$(echo "$VNAME" | sed 's/-.*//')
+          VC=$(grep -oP 'versionCode = \K[0-9]+' "$BUILD_GRADLE")
+          GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
+          GH_N=$((GH_COUNT + 1))
+          FORK_CODE=$((VC * 100 + GH_N))
+          sed -i "s/versionName = \"[^\"]*\"/versionName = \"${MAINVER}-gh${GH_N}\"/" "$BUILD_GRADLE"
+          sed -i "s/versionCode = [0-9]*/versionCode = ${FORK_CODE}/" "$BUILD_GRADLE"
+          echo "VNAME=$VNAME" >> "$GITHUB_OUTPUT"
+          echo "MAINVER=$MAINVER" >> "$GITHUB_OUTPUT"
+          echo "GH_N=$GH_N" >> "$GITHUB_OUTPUT"
+          echo "VC=$VC" >> "$GITHUB_OUTPUT"
+          echo "FORK_CODE=$FORK_CODE" >> "$GITHUB_OUTPUT"
+          echo "构建 fork 版本: ${MAINVER}-gh${GH_N} (versionCode=${FORK_CODE})"
+          # KMP: androidApp 模块无 release signingConfig，产出 unsigned APK；下方 apksigner 统一签名
+          ./gradlew :androidApp:assembleRelease --no-daemon
+
+      - name: 签名 APK（测试调试密钥）
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          # 从 base64 还原测试签名密钥（标准 Android debug keystore，密码 android，仅用于测试签名）
+          base64 -d signing/debug.keystore.b64 > signing/debug.keystore
+          chmod 600 signing/debug.keystore
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT="$SDK_ROOT/build-tools/37.0.0"
+          OUT_DIR=androidApp/build/outputs
+          mkdir -p "$OUT_DIR/final"
+          SRC_APK=""
+          for p in \
+            "$OUT_DIR/apk/release/app-release-unsigned.apk" \
+            "$OUT_DIR/apk/release/app-release.apk"; do
+            [ -f "$p" ] && SRC_APK="$p" && break
+          done
+          [ -z "$SRC_APK" ] && SRC_APK=$(ls "$OUT_DIR/apk/release/"*.apk 2>/dev/null | head -1)
+          [ -z "$SRC_APK" ] && { echo "❌ 未找到 APK 构建产物"; exit 1; }
+          echo "签名源 APK: $SRC_APK"
+          APK_NAME="Nexio.v${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}.apk"
+          "$BT/zipalign" -f 4 "$SRC_APK" "$OUT_DIR/final/aligned.apk"
+          "$BT/apksigner" sign --ks signing/debug.keystore --ks-pass pass:android \
+            --out "$OUT_DIR/final/${APK_NAME}" "$OUT_DIR/final/aligned.apk"
+          "$BT/apksigner" verify "$OUT_DIR/final/${APK_NAME}"
+          ls -lh "$OUT_DIR/final/"
+
+      - name: 上传 APK 构建产物
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexioSchedule-release-apk
+          # 仅上传最终签名 APK（排除 aligned.apk 中间产物）
+          path: androidApp/build/outputs/final/Nexio.v*.apk
+
+      - name: 发布 GitHub Release
+        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # tag 跟随上游主版本 + 构建计数：v{上游主版本}-gh{n}，每次上游升版后 gh 从 1 重新计数（与 APK 内 versionName/versionCode 一致）
+          TAG="v${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}"
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/master 2>/dev/null || echo "manual")
+          UPSTREAM_FULL=$(git rev-parse upstream/master 2>/dev/null || echo "manual")
+          UPSTREAM_VER="${{ steps.build.outputs.VNAME }}"
+          FORK_VER="${{ steps.build.outputs.MAINVER }}-gh${{ steps.build.outputs.GH_N }}"
+          FORK_CODE="${{ steps.build.outputs.FORK_CODE }}"
+          # 上游最近变更（取最近 10 个非 merge 提交标题，用于 Release notes）
+          UPSTREAM_LOG=$(git log upstream/master --oneline --no-merges -10 2>/dev/null | sed 's/^/- /')
+          if [ -z "$UPSTREAM_LOG" ]; then UPSTREAM_LOG="- （无法获取上游变更记录）"; fi
+          # 生成详细 Release notes（markdown；HaoZai000/NexioSchedule@sha 会被 GitHub 自动渲染为可点击引用）
+          # 用 python + textwrap.dedent 去除公共缩进，避免 notes 被 markdown 渲染成代码块导致 @ 引用不生效
+          export TAG UPSTREAM_SHORT UPSTREAM_VER FORK_VER FORK_CODE UPSTREAM_LOG
+          python3 - <<'PYEOF' > /tmp/release_notes.md
+          import os, textwrap
+          notes = textwrap.dedent("""\
+              ### 📦 构建信息
+              - **上游基准**：HaoZai000/NexioSchedule@{0}（上游 versionName `{1}`）
+              - **fork 版本**：`{2}`（versionName `{3}` / versionCode `{4}`）
+              - **签名**：Android 调试密钥（可直接侧载安装）
+
+              ### 🔄 上游最近变更（本次同步包含的内容）
+              {5}
+
+              ### 🧩 本 fork 相对上游的定制
+              1. **勿扰：下课保持勿扰，不自动恢复**
+                 - 下课后不再自动还原课前静音/勿扰状态；需关闭请点通知栏 / 超级岛按钮手动操作
+                 - 不再注册下课闹钟（真实课与测试课仅保留上课闹钟）；设置页说明文案已与行为一致
+                 - 改动：`ClassDndHelper.kt`、`ReminderStr.kt`
+              2. **手环推送诊断 + 节点选择 + 反馈**
+                 - 诊断快照：全量在线节点、选中节点与匹配方式、缓存→刷新对比、对端应用预检结果、发送状态/错误原因/载荷字节/ACK 状态，面板只读展示
+                 - 盲选修复：发送前强制刷新在线节点（缓存仅兜底），多绑定时按设备名启发式匹配目标手环；预检未识别到对端应用即阻断并分级报错
+                 - 导出页反馈 + 互联权限引导；未授予权限时跳转系统设置 / 小米运动健康；进入导出页尝试拉起手环端 App
+                 - 改动：`WearableScheduleSync.kt`、`BackupAndMigrationScreen.kt`、路由层
+              3. **移除统计上报**
+                 - 安装/活跃上报在 `StatsReporter` 置为 no-op，不再向统计服务发请求（保留设备 ID 生成）
+              4. **去掉启动自动更新弹窗**
+                 - 启动时不再自动弹更新提示；设置页手动检查入口保留，更新跳转指向本 fork Releases
+              5. **玻璃性能**
+                 - 上游已重写壁纸模糊金字塔 + shader 管线；旧的本地页级采样补丁已废弃，卡顿情况需真机验证
+
+              ### ⚠️ 安装注意
+              - 本 fork APK 签名与上游原版不同：若设备当前安装的是**上游原版**，需先卸载再安装本版本（注意备份数据）
+              - 同一 fork 系列（`-gh`）可**直接覆盖升级**（versionCode 单调递增）
+              - 应用内若提示"有新版本"，请到本 fork Releases 下载对应 `-gh` 版本，勿点上游原版（会恢复「下课自动关闭」行为）
+          """).format(
+              os.environ["UPSTREAM_SHORT"], os.environ["UPSTREAM_VER"],
+              os.environ["TAG"], os.environ["FORK_VER"], os.environ["FORK_CODE"],
+              os.environ["UPSTREAM_LOG"])
+          print(notes)
+          PYEOF
+          gh release create "$TAG" androidApp/build/outputs/final/Nexio.v*.apk \
+            --repo xiaoxun007/NexioSchedule \
+            --title "$TAG" \
+            --notes-file /tmp/release_notes.md || echo "Release 已存在或创建失败（忽略）"
+
