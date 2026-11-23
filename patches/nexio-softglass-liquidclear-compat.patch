@@ -1,0 +1,70 @@
+# P10: SoftGlass liquidClear 兼容（方案 B）
+# 上游 b1fa7373 引用了尚未随 SoftGlass 0.1.3 发布的 SoftGlassStyle.liquidClear() 扩展，编译报 Unresolved reference。
+# 本补丁移除两处未发布 API 调用与对应 import，保留 liquidRefraction 位移折射。
+# 移除条件：SoftGlass 发布含 liquidClear 的版本（或上游移除该调用）后，删除本补丁块。
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt
+index e703c349..77bd90e6 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt
+@@ -16,7 +16,6 @@ import com.haooz.chedule.ui.components.SoftGlassSurface
+ import com.haooz.chedule.ui.components.rememberSoftGlassSurface
+ import com.haooz.softglass.glass.LiquidLens
+ import com.haooz.softglass.glass.SoftGlassStyle
+-import com.haooz.softglass.liquidClear
+ import com.haooz.chedule.ui.glass.ScheduleSoftGlassStyle
+ import com.haooz.chedule.ui.utils.AppMaterialSettings
+ import com.haooz.softglass.glass.untransformGlassOrigin
+@@ -69,7 +68,7 @@ internal fun rememberScheduleGlassStyle(displayAppearance: AppearanceConfig): So
+             lightAngleRange = CARD_LIGHT_ANGLE_RANGE,
+             edgeLightFalloff = CARD_LIGHT_FALLOFF,
+         )
+-        if (liquidRefraction) style.liquidClear() else style
++        style
+     }
+ }
+ 
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/utils/AppMaterialSettings.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/utils/AppMaterialSettings.kt
+index f05b6903..c902463b 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/utils/AppMaterialSettings.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/utils/AppMaterialSettings.kt
+@@ -11,7 +11,6 @@ import com.haooz.softglass.glass.GlassTone
+ import com.haooz.softglass.glass.SoftGlassStyle
+ import com.haooz.softglass.glass.ThemeFill
+ import com.haooz.softglass.GlassMaterialLevel
+-import com.haooz.softglass.liquidClear
+ import com.haooz.softglass.surfaceAlpha
+ import com.haooz.softglass.tuning
+ import com.haooz.softglass.platform.isRenderEffectSupported
+@@ -20,9 +19,8 @@ import com.haooz.softglass.platform.isRenderEffectSupported
+  * 应用材质质量档（柔光玻璃 / 液态玻璃 / 清透磨砂 / 无材质），玻璃模糊、折射、边光都读它；默认柔光玻璃。
+  * 顶栏「真·渐进模糊」是独立开关 [trueProgressiveBlur]，不占用档位。
+  *
+- * 液态玻璃与柔光共用几何 / 边光 / 底色，折射换成液态位移场、调色换成清透口径
+- * （见 `SoftGlassStyle.liquidClear`）；模糊压低一档（小控件 4dp、面板与对话框 8dp），
+- * 见 [GlassMaterialLevel.LIQUID]。
++ * 液态玻璃与柔光共用几何 / 边光 / 底色，折射换成液态位移场、调色换成清透口径；
++ * 模糊压低一档（小控件 4dp、面板与对话框 8dp），见 [GlassMaterialLevel.LIQUID]。
+  *
+  * 统一限制：RenderEffect 不可用（Android API < 31）的设备锁死无材质档（见 [normalize]），
+  * 模糊相关的按能力降级分支不在这里出现——能力不足时档位本身就是无材质。
+@@ -97,7 +95,7 @@ object AppMaterialSettings {
+     /**
+      * 悬浮控件（顶栏按钮、胶囊这类）的玻璃样式：基准样式套上基调与填充，再按材质档位
+      * 决定折射、调色与高光 —— 磨砂档没有折射，方向光也关掉（纯磨砂面）；
+-     * 柔光 / 液态档两者都留，液态档再把折射换成位移场、调色换成 [liquidClear]。
++     * 柔光 / 液态档两者都留，液态档再把折射换成位移场、调色换成清透口径。
+      *
+      * 控件的材质就这一处定义，调用方只传「用哪个基调 / 哪个填充」。
+      */
+@@ -108,9 +106,9 @@ object AppMaterialSettings {
+         tone: GlassTone = BrightTone,
+     ): SoftGlassStyle {
+         val resolved = base.copy(fill = fill, tone = tone).filled(isDark)
+-        // liquidClear 必须排在 filled 之后：基调会把调色字段写回柔光档的值
++        // 液态档保留位移折射；清透调色口径依赖尚未随 SoftGlass 0.1.3 发布的扩展 API，暂不套用
+         val glass = if (isLiquidTier()) {
+-            resolved.copy(liquidRefraction = true).liquidClear()
++            resolved.copy(liquidRefraction = true)
+         } else {
+             resolved
+         }

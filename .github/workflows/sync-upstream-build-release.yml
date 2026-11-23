@@ -113,6 +113,16 @@ jobs:
           grep -q "对端应用未被识别" "$WS" || { echo "❌ P9 预检分级文案标记缺失"; exit 1; }
           grep -q "DiagRow" "$UI" || { echo "❌ P9 诊断面板行组件标记缺失"; exit 1; }
           grep -q "WearableDiagNode" "$UI" || { echo "❌ P9 节点列表数据结构标记缺失"; exit 1; }
+          # P10: softglass liquidClear 兼容（方案 B）：上游 b1fa7373 引用了尚未随 SoftGlass 0.1.3 发布的
+          #     SoftGlassStyle.liquidClear() 扩展；移除两处调用与 import，保留 liquidRefraction 位移折射。
+          #     移除条件：SoftGlass 发布含 liquidClear 的版本（或上游移除该调用）后，删除本补丁块。
+          git show master:patches/nexio-softglass-liquidclear-compat.patch > /tmp/p10.patch
+          git apply --3way /tmp/p10.patch || git apply /tmp/p10.patch
+          GLASS_SURFACE=ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt
+          MATERIAL_SETTINGS=ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/utils/AppMaterialSettings.kt
+          if grep -n "liquidClear" "$GLASS_SURFACE" "$MATERIAL_SETTINGS"; then
+            echo "❌ P10 liquidClear 残留（应为 0）"; exit 1
+          fi
           echo "✅ 全部补丁应用并验证通过"
           git status --short
 
