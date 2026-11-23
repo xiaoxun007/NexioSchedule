@@ -1,0 +1,195 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -45,6 +45,8 @@
+     val nodeIdChanged: Boolean = false,
+     val payloadBytes: Int = 0,
+     val ackState: String = "NONE",
++    // gh3 P12 拉起状态
++    val lastLaunchState: String = "",
+ )
+ 
+ /**
+@@ -68,6 +70,9 @@
+     /** ACK 确认超时：sendMessage 成功后等待手环回 ack 的秒数（仅观测，不阻塞回调） */
+     private const val ACK_TIMEOUT_SEC = 5L
+ 
++    /** gh3 P12：拉起调用节流窗口，避免短时间内重复唤起手环 */
++    private const val LAUNCH_THROTTLE_MS = 30_000L
++
+     /** 上一包推送刚落地、期间又攒下变更，补推时用的归因名。 */
+     private const val REASON_PUSH_DRAINED = "push-drained"
+ 
+@@ -134,6 +139,10 @@
+     @Volatile private var diagPayloadBytes: Int = 0
+     @Volatile private var ackState: String = "NONE"
+ 
++    // ---- gh3 P12 拉起状态 ----
++    @Volatile private var lastLaunchState: String = ""
++    @Volatile private var lastLaunchAt: Long = 0L
++
+     /** 记录权限类失败到诊断快照（只读观测）。 */
+     private fun recordPermissionFailure(detail: String) {
+         lastPushOutcome = "权限未授予或授权失败"
+@@ -584,7 +593,8 @@
+                     deliver(onResult, false, "手环上未安装 Nexio 手环版，请先用小米运动健康安装")
+                     return@addOnSuccessListener
+                 }
+-                val launched = runCatching { node.launchWearApp(pkg, WATCH_ROUTE) }.isSuccess
++                val targetId = nodeId ?: ""
++                val launched = runCatching { launchWearAppForNode(node, targetId, "fail-recover") }.isSuccess
+                 NexioLog.i(TAG, "wear app installed, launch=$launched")
+                 deliver(
+                     onResult,
+@@ -738,11 +748,12 @@
+         nodeIdChanged = nodeIdChanged,
+         payloadBytes = diagPayloadBytes,
+         ackState = ackState,
++        lastLaunchState = lastLaunchState,
+     )
+ 
+     /**
+-     * 拉起手表端课程表 App（失败全程静默，不弹任何 UI）。
+-     * 权限未授予/无节点/未安装/调用失败均静默 return；hap uri 需真机验证。
++     * 拉起手表端课程表 App（对外入口；后台线程执行，不弹 UI）。
++     * 权限未授予/无节点/未安装/调用失败均落 [lastLaunchState]，诊断面板可见。
+      */
+     fun launchWearScheduleApp(context: Context) {
+         if (!initialized.get()) init(context)
+@@ -750,31 +761,67 @@
+         exec.execute {
+             try {
+                 if (!permissionGranted.get()) {
+-                    NexioLog.i(TAG, "launchWearApp skip: permission not granted (silent)")
++                    lastLaunchState = "跳过：权限未授予"
++                    NexioLog.i(TAG, "launchWearApp skip: permission not granted")
+                     return@execute
+                 }
+                 val id = resolveNodeId() ?: run {
+-                    NexioLog.i(TAG, "launchWearApp skip: no node (silent)")
++                    lastLaunchState = "跳过：无在线节点"
++                    NexioLog.i(TAG, "launchWearApp skip: no node")
+                     return@execute
+                 }
+                 val api = nodeApi ?: run {
+-                    NexioLog.i(TAG, "launchWearApp skip: nodeApi null (silent)")
++                    lastLaunchState = "跳过：节点 API 不可用"
++                    NexioLog.i(TAG, "launchWearApp skip: nodeApi null")
+                     return@execute
+                 }
+                 api.isWearAppInstalled(appContext.packageName)
+                     .addOnSuccessListener { installed ->
+                         if (installed != true) {
+-                            NexioLog.i(TAG, "launchWearApp skip: not installed (silent)")
++                            lastLaunchState = "跳过：对端应用未安装"
++                            NexioLog.i(TAG, "launchWearApp skip: not installed")
+                             return@addOnSuccessListener
+                         }
+-                        api.launchWearApp(appContext.packageName, WATCH_ROUTE)
+-                            .addOnSuccessListener { NexioLog.i(TAG, "launchWearApp ok: $WATCH_ROUTE") }
+-                            .addOnFailureListener { e -> NexioLog.w(TAG, "launchWearApp fail: ${e.message} (silent)") }
++                        launchWearAppForNode(api, id, "entry")
++                    }
++                    .addOnFailureListener { e ->
++                        lastLaunchState = "跳过：未安装预检失败（${e.message ?: ""}）"
++                        NexioLog.w(TAG, "isWearAppInstalled fail: ${e.message}")
+                     }
+-                    .addOnFailureListener { e -> NexioLog.w(TAG, "isWearAppInstalled fail: ${e.message} (silent)") }
+             } catch (e: Exception) {
+-                NexioLog.w(TAG, "launchWearScheduleApp error: ${e.message} (silent)")
++                lastLaunchState = "异常：${e.message ?: "未知错误"}"
++                NexioLog.w(TAG, "launchWearScheduleApp error: ${e.message}")
+             }
+         }
+     }
++
++    /**
++     * gh3 P12：实际调用 `launchWearApp(nodeId, uri)`。
++     * 注意 AAR/文档签名首参是 **nodeId**（不是包名）；带 30s 节流，结果写入 [lastLaunchState]。
++     */
++    private fun launchWearAppForNode(api: NodeApi, id: String, source: String): Boolean {
++        val now = System.currentTimeMillis()
++        if (now - lastLaunchAt < LAUNCH_THROTTLE_MS) {
++            lastLaunchState = "节流跳过（${LAUNCH_THROTTLE_MS / 1000}s 内已拉起）"
++            NexioLog.i(TAG, "launchWearApp throttled ($source)")
++            return true
++        }
++        lastLaunchAt = now
++        return try {
++            api.launchWearApp(id, WATCH_ROUTE)
++                .addOnSuccessListener {
++                    lastLaunchState = "成功"
++                    NexioLog.i(TAG, "launchWearApp ok ($source): $WATCH_ROUTE")
++                }
++                .addOnFailureListener { e ->
++                    lastLaunchState = "失败：${e.message ?: "未知错误"}"
++                    NexioLog.w(TAG, "launchWearApp fail ($source): ${e.message}")
++                }
++            true
++        } catch (e: Exception) {
++            lastLaunchState = "异常：${e.message ?: "未知错误"}"
++            NexioLog.w(TAG, "launchWearApp error ($source): ${e.message}")
++            false
++        }
++    }
+ }
+diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+@@ -367,6 +367,7 @@
+                 nodeIdChanged = d.nodeIdChanged,
+                 payloadBytes = d.payloadBytes,
+                 ackState = d.ackState,
++                lastLaunchState = d.lastLaunchState,
+                 lastPushAtText = if (d.lastPushAt > 0L) fmt.format(d.lastPushAt) else "",
+             )
+         },
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt
+@@ -1616,6 +1616,13 @@
+     LaunchedEffect(switchable, selectedTab, pageCount) {
+         if (switchable) pageSwitch.animateTo(selectedTab.coerceIn(0, pageCount - 1))
+     }
++    // gh3 P12：路由级触发拉起——当前停留在导出页时才拉起手环端 App；
++    // 键为 selectedTab + 当前模式，切到导出页会重触发，避免预组合导致首帧跳过。
++    LaunchedEffect(selectedTab, switchableModes.getOrNull(selectedTab)) {
++        if (switchableModes.getOrNull(selectedTab) == ScheduleDataManageMode.Export) {
++            onEnterExportScreen()
++        }
++    }
+     // 抓起冻住滑块；松手强制吸附
+     var pillFreezeKey by remember(mode) { mutableIntStateOf(0) }
+     var pillAlignKey by remember(mode) { mutableIntStateOf(0) }
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -128,6 +128,8 @@
+     val nodeIdChanged: Boolean = false,
+     val payloadBytes: Int = 0,
+     val ackState: String = "NONE",
++    // gh3 P12 拉起状态
++    val lastLaunchState: String = "",
+     val lastPushAtText: String = "",
+ )
+ 
+@@ -293,9 +295,9 @@
+                 .collect { offset -> listScrollY = offset }
+         }
+         LaunchedEffect(mode) {
++            // gh3 P12：拉起触发上移到路由级 LaunchedEffect（AppRoutes.kt）；本页级 effect 只刷新诊断快照
+             if (mode == ScheduleDataManageMode.Export) {
+                 pushDiag = wearableDiag()
+-                onEnterExportScreen()
+             }
+         }
+         LazyColumn(
+@@ -735,6 +737,8 @@
+                                 DiagRow("上次推送", diag.lastPushAtText.ifEmpty { "暂无记录" })
+                                 DiagRow("排队队列", if (diag.pendingQueued) "有课表待补推" else "无")
+                                 DiagRow("互联权限", if (diag.permissionGranted) "已授予" else "未授予")
++                                // gh3 P12：拉起状态
++                                DiagRow("拉起状态", diag.lastLaunchState.ifEmpty { "未尝试" })
+ 
+                                 if (!diag.permissionGranted) {
+                                     ArrowPreference(

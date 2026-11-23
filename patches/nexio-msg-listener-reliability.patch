@@ -1,0 +1,200 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -47,6 +47,10 @@
+     val ackState: String = "NONE",
+     // gh3 P12 拉起状态
+     val lastLaunchState: String = "",
++    // gh3 P15 监听可靠性
++    val listenerBound: Boolean = false,
++    val lastBindError: String = "",
++    val lastInboundError: String = "",
+ )
+ 
+ /**
+@@ -152,6 +156,11 @@
+     @Volatile private var lastLaunchState: String = ""
+     @Volatile private var lastLaunchAt: Long = 0L
+ 
++    // ---- gh3 P15 监听绑定/入站解析 ----
++    @Volatile private var listenerBound: Boolean = false
++    @Volatile private var lastBindError: String = ""
++    @Volatile private var lastInboundError: String = ""
++
+     // ---- gh3 P13 失败退避重试 ----
+     @Volatile private var retryCount: Int = 0
+     @Volatile private var retryFuture: ScheduledFuture<*>? = null
+@@ -199,10 +208,49 @@
+         }
+     }
+ 
++    /**
++     * gh3 P15：镜像手环 parseMessage 的 `data` 解包规则，消除手机/手表两侧解析不对称：
++     *  - 外层对象且无 `protocol` 时，`data` 为字符串 → 再解析一层；
++     *  - `data` 为对象 → 把 `data` 的键合并到外层（等价手表侧 Object.assign）。
++     * 解析失败返回 null，异常写入 [lastInboundError] 供诊断面板可见。
++     */
++    private fun unwrapIncoming(text: String): JSONObject? {
++        return try {
++            val outer = JSONObject(text)
++            if (!outer.has("protocol") && outer.has("data")) {
++                val dataAny = outer.get("data")
++                when (dataAny) {
++                    is String -> JSONObject(dataAny)
++                    is JSONObject -> {
++                        val merged = JSONObject()
++                        val keys = outer.keys()
++                        while (keys.hasNext()) {
++                            val k = keys.next()
++                            if (k != "data") merged.put(k, outer.get(k))
++                        }
++                        val dKeys = dataAny.keys()
++                        while (dKeys.hasNext()) {
++                            val k = dKeys.next()
++                            merged.put(k, dataAny.get(k))
++                        }
++                        merged
++                    }
++                    else -> outer
++                }
++            } else {
++                outer
++            }
++        } catch (e: Exception) {
++            lastInboundError = e.message ?: "入站消息解析失败"
++            NexioLog.w(TAG, "unwrap inbound fail: ${e.message}")
++            null
++        }
++    }
++
+     private val messageListener = OnMessageReceivedListener { _, message ->
+         try {
+             val text = String(message, Charsets.UTF_8)
+-            val json = JSONObject(text)
++            val json = unwrapIncoming(text) ?: return@OnMessageReceivedListener
+             val protocol = json.optString("protocol")
+             if (protocol.isNotEmpty() && protocol != PROTOCOL) return@OnMessageReceivedListener
+             val action = json.optString("action")
+@@ -231,6 +279,7 @@
+                 }
+             }
+         } catch (e: Exception) {
++            lastInboundError = e.message ?: "入站消息处理失败"
+             NexioLog.w(TAG, "handle message fail: ${e.message}")
+         }
+     }
+@@ -504,6 +553,8 @@
+             recordSendFailure("手环消息通道不可用", reason, id, onResult)
+             return
+         }
++        // gh3 P15：发送前确保入站监听已绑定，未绑定则同步补绑并短等一次，消除「发出去收不到 ACK」的竞态
++        ensureListenerBound(id)
+         // gh3 P14：发送前主动拉起手环端 App（失败不阻断），留短暂就绪窗口再发
+         preflightLaunch(id)
+         api.sendMessage(id, payload.toByteArray(Charsets.UTF_8))
+@@ -752,26 +803,49 @@
+     }
+ 
+     private fun bindMessageListener(id: String) {
+-        val api = messageApi ?: return
++        val api = messageApi ?: run {
++            listenerBound = false
++            lastBindError = "messageApi 不可用"
++            return
++        }
+         try {
+             api.addListener(id, messageListener)
+                 .addOnSuccessListener {
++                    listenerBound = true
++                    lastBindError = ""
+                     NexioLog.i(TAG, "message listener bound: $id")
+                 }
+                 .addOnFailureListener { e ->
+-                    // 已注册属正常（重连/重复 bind），不刷警告
++                    // 已注册属正常（重连/重复 bind），视为已绑定；其余失败落诊断快照
+                     val msg = e.message ?: ""
+                     if (msg.contains("registered")) {
++                        listenerBound = true
++                        lastBindError = ""
+                         NexioLog.i(TAG, "message listener already bound")
+                     } else {
++                        listenerBound = false
++                        lastBindError = msg
+                         NexioLog.w(TAG, "bind listener fail: $msg")
+                     }
+                 }
+         } catch (e: Exception) {
++            listenerBound = false
++            lastBindError = e.message ?: "绑定异常"
+             NexioLog.w(TAG, "bind listener error: ${e.message}")
+         }
+     }
+ 
++    /** gh3 P15：发送前确保入站监听已绑定；未绑定则同步补绑并短等一次（最多 ~500ms）。 */
++    private fun ensureListenerBound(id: String) {
++        if (listenerBound) return
++        NexioLog.i(TAG, "listener not bound, rebind before send: $id")
++        bindMessageListener(id)
++        val deadline = System.currentTimeMillis() + 500L
++        while (!listenerBound && System.currentTimeMillis() < deadline) {
++            try { Thread.sleep(50L) } catch (_: InterruptedException) { break }
++        }
++    }
++
+     private fun startNodeWatcher() {
+         val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
+         exec.scheduleWithFixedDelay({
+@@ -801,6 +875,9 @@
+         payloadBytes = diagPayloadBytes,
+         ackState = ackState,
+         lastLaunchState = lastLaunchState,
++        listenerBound = listenerBound,
++        lastBindError = lastBindError,
++        lastInboundError = lastInboundError,
+     )
+ 
+     /**
+diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+@@ -368,6 +368,9 @@
+                 payloadBytes = d.payloadBytes,
+                 ackState = d.ackState,
+                 lastLaunchState = d.lastLaunchState,
++                listenerBound = d.listenerBound,
++                lastBindError = d.lastBindError,
++                lastInboundError = d.lastInboundError,
+                 lastPushAtText = if (d.lastPushAt > 0L) fmt.format(d.lastPushAt) else "",
+             )
+         },
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -130,6 +130,10 @@
+     val ackState: String = "NONE",
+     // gh3 P12 拉起状态
+     val lastLaunchState: String = "",
++    // gh3 P15 监听可靠性
++    val listenerBound: Boolean = false,
++    val lastBindError: String = "",
++    val lastInboundError: String = "",
+     val lastPushAtText: String = "",
+ )
+ 
+@@ -739,6 +743,16 @@
+                                 DiagRow("互联权限", if (diag.permissionGranted) "已授予" else "未授予")
+                                 // gh3 P12：拉起状态
+                                 DiagRow("拉起状态", diag.lastLaunchState.ifEmpty { "未尝试" })
++                                // gh3 P15：消息监听绑定态 + 入站解析异常
++                                val listenerValue = when {
++                                    diag.listenerBound -> "已绑定"
++                                    diag.lastBindError.isNotEmpty() -> "失败：${diag.lastBindError}"
++                                    else -> "未绑定"
++                                }
++                                DiagRow("消息监听", listenerValue)
++                                if (diag.lastInboundError.isNotEmpty()) {
++                                    DiagRow("入站异常", diag.lastInboundError)
++                                }
+ 
+                                 if (!diag.permissionGranted) {
+                                     ArrowPreference(

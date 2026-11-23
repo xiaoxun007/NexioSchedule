@@ -1,0 +1,107 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -67,9 +67,15 @@
+     /** 手环端的首页路由（拉起手环 App 用，与 rpk manifest 的 router.entry 一致） */
+     private const val WATCH_ROUTE = "pages/index"
+ 
+-    /** ACK 确认超时：sendMessage 成功后等待手环回 ack 的秒数（仅观测，不阻塞回调） */
++    /** ACK 确认超时：sendMessage 成功后等待手环回 ack 的秒数（仅观测，不阻塞回调；ACK 超时不触发重试） */
+     private const val ACK_TIMEOUT_SEC = 5L
+ 
++    /** gh3 P13：sendMessage 失败后的退避重试间隔（ms），共两次；ACK 超时不在此列 */
++    private val RETRY_DELAY_MS = longArrayOf(1000L, 2000L)
++
++    /** gh3 P13：最多重试次数（首次发送之外） */
++    private const val MAX_RETRY = 2
++
+     /** gh3 P12：拉起调用节流窗口，避免短时间内重复唤起手环 */
+     private const val LAUNCH_THROTTLE_MS = 30_000L
+ 
+@@ -143,6 +149,12 @@
+     @Volatile private var lastLaunchState: String = ""
+     @Volatile private var lastLaunchAt: Long = 0L
+ 
++    // ---- gh3 P13 失败退避重试 ----
++    @Volatile private var retryCount: Int = 0
++    @Volatile private var retryFuture: ScheduledFuture<*>? = null
++    @Volatile private var pendingRetryReason: String = ""
++    @Volatile private var pendingRetryScheduleName: String = ""
++
+     /** 记录权限类失败到诊断快照（只读观测）。 */
+     private fun recordPermissionFailure(detail: String) {
+         lastPushOutcome = "权限未授予或授权失败"
+@@ -198,6 +210,7 @@
+                     val expected = inFlightSentAt
+                     if (expected > 0L && ackSentAt == expected) {
+                         cancelAckTimeout()
++                        cancelPendingRetry()
+                         inFlightSentAt = -1L
+                         ackState = "ACKED"
+                         sendState = "SUCCESS"
+@@ -288,6 +301,8 @@
+             // 本地导出成功：挂回调，推送异步派发，结果由结算点回调
+             manualOutcome = onDone
+             manualInFlight = false
++            retryCount = 0
++            cancelPendingRetry()
+             report(false, "已生成课表，正在推送到手环…")
+             ensurePermissionThenPush("manual-export", scheduleName, report)
+             file.absolutePath
+@@ -303,6 +318,8 @@
+     /** 立即推送整周课表 */
+     fun pushSchedule(reason: String = "manual", scheduleName: String = "") {
+         if (!initialized.get()) return
++        retryCount = 0
++        cancelPendingRetry()
+         ensurePermissionThenPush(reason, scheduleName)
+     }
+ 
+@@ -497,15 +514,45 @@
+             }
+             .addOnFailureListener { e ->
+                 NexioLog.w(TAG, "push send fail ($reason), node=$id, bytes=$payloadBytes: ${e.message}")
++                // gh3 P13：仅 sendMessage 通道失败触发退避重试（1s/2s，最多 2 次）；
++                // ACK 5s 超时不触发重试。重试每次重建整包（新 sentAt），inFlightSentAt 跟随最新。
++                if (retryCount < MAX_RETRY) {
++                    scheduleRetry(reason, scheduleName, e.message ?: "sendMessage failed")
++                    return@addOnFailureListener
++                }
+                 releasePushSlot()
+-                // 不自动重试：失败多半是「手环 App 没在前台 / 没装」，
+-                // 反复重试只会反复弹授权、反复拉起手环。交给 explainFailure 给原因。
++                // 两次重试仍失败：交给 explainFailure 给可执行原因
+                 sendState = "FAILED"
+                 sendError = e.message ?: "sendMessage failed"
+                 explainFailure(payloadBytes, e.message ?: "", onResult)
+             }
+     }
+ 
++    /** gh3 P13：排一次退避重试；ACK 到达会由 [cancelPendingRetry] 取消。 */
++    private fun scheduleRetry(reason: String, scheduleName: String, detail: String) {
++        retryCount += 1
++        pendingRetryReason = reason
++        pendingRetryScheduleName = scheduleName
++        sendState = "RETRY"
++        sendError = "发送失败，第 ${retryCount}/${MAX_RETRY} 次重试：$detail"
++        cancelAckTimeout()
++        releasePushSlot()
++        val delay = RETRY_DELAY_MS[(retryCount - 1).coerceAtMost(RETRY_DELAY_MS.size - 1)]
++        val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
++        cancelPendingRetry()
++        retryFuture = exec.schedule({
++            NexioLog.i(TAG, "push retry ${retryCount}/${MAX_RETRY}, reason=$reason")
++            ensurePermissionThenPush(pendingRetryReason, pendingRetryScheduleName)
++        }, delay, TimeUnit.MILLISECONDS)
++    }
++
++    private fun cancelPendingRetry() {
++        retryFuture?.cancel(false)
++        retryFuture = null
++        pendingRetryReason = ""
++        pendingRetryScheduleName = ""
++    }
++
+     /** 统一记录一次发送失败到诊断快照并释放推送槽。 */
+     private fun recordSendFailure(
+         detail: String,

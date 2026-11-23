@@ -123,6 +123,23 @@ jobs:
           if grep -n "liquidClear" "$GLASS_SURFACE" "$MATERIAL_SETTINGS"; then
             echo "❌ P10 liquidClear 残留（应为 0）"; exit 1
           fi
+          # P12: P5 拉起恢复（路由级触发 + launchWearApp 首参改 nodeId + 30s 节流 + 拉起状态诊断）
+          git show master:patches/nexio-p5-launch-restore.patch > /tmp/p12.patch
+          git apply --3way /tmp/p12.patch || git apply /tmp/p12.patch
+          grep -q "lastLaunchState" "$WS" || { echo "❌ P12 拉起状态标记缺失"; exit 1; }
+          grep -q "onEnterExportScreen" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt || { echo "❌ P12 路由级拉起标记缺失"; exit 1; }
+          # P13: 发送失败退避重试（1s/2s，最多 2 次；ACK 超时不重试）
+          git show master:patches/nexio-push-retry.patch > /tmp/p13.patch
+          git apply --3way /tmp/p13.patch || git apply /tmp/p13.patch
+          grep -q "RETRY_DELAY_MS" "$WS" || { echo "❌ P13 退避重试标记缺失"; exit 1; }
+          # P14: 推送前主动拉起手环 App（失败不阻断，留就绪窗口）
+          git show master:patches/nexio-push-preflight-launch.patch > /tmp/p14.patch
+          git apply --3way /tmp/p14.patch || git apply /tmp/p14.patch
+          grep -q "LAUNCH_READY_WAIT_SEC" "$WS" || { echo "❌ P14 推送前拉起标记缺失"; exit 1; }
+          # P15: 消息监听可靠性（绑定态观测 + 发送前补绑 + data 解包镜像 + 入站异常可见）
+          git show master:patches/nexio-msg-listener-reliability.patch > /tmp/p15.patch
+          git apply --3way /tmp/p15.patch || git apply /tmp/p15.patch
+          grep -q "listenerBound" "$WS" || { echo "❌ P15 监听绑定标记缺失"; exit 1; }
           echo "✅ 全部补丁应用并验证通过"
           git status --short
 
@@ -241,7 +258,11 @@ jobs:
                  - 安装/活跃上报在 `StatsReporter` 置为 no-op，不再向统计服务发请求（保留设备 ID 生成）
               4. **去掉启动自动更新弹窗**
                  - 启动时不再自动弹更新提示；设置页手动检查入口保留，更新跳转指向本 fork Releases
-              5. **玻璃性能**
+              5. **推送链路可靠性（gh3）**
+                 - 导出页路由级触发拉起手环端 App（`launchWearApp` 首参修正为 nodeId，30s 节流，拉起状态面板可见）
+                 - 发送失败按 1s/2s 退避重试最多 2 次（ACK 超时不重试）；推送前主动拉起并留就绪窗口
+                 - 消息监听绑定态观测、发送前补绑、入站 `data` 嵌套解包与解析异常面板可见
+              6. **玻璃性能**
                  - 上游已重写壁纸模糊金字塔 + shader 管线；旧的本地页级采样补丁已废弃，卡顿情况需真机验证
 
               ### ⚠️ 安装注意

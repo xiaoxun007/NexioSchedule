@@ -1,0 +1,49 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -79,6 +79,9 @@
+     /** gh3 P12：拉起调用节流窗口，避免短时间内重复唤起手环 */
+     private const val LAUNCH_THROTTLE_MS = 30_000L
+ 
++    /** gh3 P14：推送前主动拉起手环 App 后的就绪等待秒数（经验值，可真机校准） */
++    private const val LAUNCH_READY_WAIT_SEC = 2.5
++
+     /** 上一包推送刚落地、期间又攒下变更，补推时用的归因名。 */
+     private const val REASON_PUSH_DRAINED = "push-drained"
+ 
+@@ -501,6 +504,8 @@
+             recordSendFailure("手环消息通道不可用", reason, id, onResult)
+             return
+         }
++        // gh3 P14：发送前主动拉起手环端 App（失败不阻断），留短暂就绪窗口再发
++        preflightLaunch(id)
+         api.sendMessage(id, payload.toByteArray(Charsets.UTF_8))
+             .addOnSuccessListener {
+                 NexioLog.i(TAG, "push sent ($reason), node=$id, bytes=$payloadBytes")
+@@ -871,4 +876,26 @@
+             false
+         }
+     }
++
++    /** gh3 P14：推送前主动拉起（失败不阻断发送），之后留 [LAUNCH_READY_WAIT_SEC] 就绪窗口。 */
++    private fun preflightLaunch(id: String) {
++        try {
++            if (!permissionGranted.get()) {
++                lastLaunchState = "跳过：权限未授予"
++                return
++            }
++            if (peerInstalled == false) {
++                lastLaunchState = "跳过：对端应用未安装"
++                return
++            }
++            val api = nodeApi ?: run {
++                lastLaunchState = "跳过：节点 API 不可用"
++                return
++            }
++            launchWearAppForNode(api, id, "preflight")
++            Thread.sleep((LAUNCH_READY_WAIT_SEC * 1000).toLong())
++        } catch (e: Exception) {
++            lastLaunchState = "拉起异常：${e.message ?: ""}"
++        }
++    }
+ }
