@@ -11,7 +11,13 @@
 name: 同步上游并构建 Release APK
 
 "on":
-  workflow_dispatch: {}          # 仅手动触发（已移除 schedule cron 自动同步/自动构建发布）
+  workflow_dispatch:
+    # 默认只构建并上传 artifact，不创建 Release；确需发版时在页面勾选 publish_release
+    inputs:
+      publish_release:
+        description: 构建完成后是否创建 GitHub Release（默认否，仅产出 artifact）
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -85,37 +91,23 @@ jobs:
           git show master:patches/class-dnd-auto-end.patch > /tmp/p1.patch
           git apply --3way /tmp/p1.patch || git apply /tmp/p1.patch
           grep -q "不自动恢复" "$DND" || { echo "❌ P1 class-dnd 标记缺失"; exit 1; }
-          # P2（已退役）：旧 wearable-sync-stability.patch 与上游 PR #116 重写后的推送链路冲突，
-          #     不再重放；其 ACK 观测/诊断快照/手动回调职责由 P9（nexio-push-diag-node-select）承接。
-          # P3: feedback（平台 Toast 四态 + 互联权限引导 + 诊断面板入口）
+          # P3+P9: 反馈四态 Toast + 互联权限引导 + 诊断面板/节点选择/预检分级（不含任何拉起入口）
           git show master:patches/wearable-push-feedback.patch > /tmp/p3.patch
           git apply --3way /tmp/p3.patch || git apply /tmp/p3.patch
-          grep -q "wearableDiag" "$UI" || { echo "❌ P3 feedback 诊断面板标记缺失"; exit 1; }
+          grep -q "wearableDiag" "$UI" || { echo "❌ P3 诊断面板标记缺失"; exit 1; }
+          grep -q "PushDiagnostics" "$WS" || { echo "❌ P9 diagnostics 快照标记缺失"; exit 1; }
+          grep -q "getDiagnostics" "$WS" || { echo "❌ P9 getDiagnostics 标记缺失"; exit 1; }
+          grep -q "manualOutcome" "$WS" || { echo "❌ P9 manualOutcome 标记缺失"; exit 1; }
           # P6: remove-telemetry（StatsReporter no-op，保留 ensureDeviceId）
           git show master:patches/remove-telemetry.patch > /tmp/p6.patch
           git apply --3way /tmp/p6.patch || git apply /tmp/p6.patch
           grep -q "no-op: 不上报" core/src/commonMain/kotlin/com/haooz/chedule/data/platform/StatsReporter.kt || { echo "❌ P6 telemetry 标记缺失"; exit 1; }
-          # P7: 已废弃——上游 3178d157/570ab540 等已把玻璃管线重写为壁纸模糊金字塔+shader，
-          #     旧 SharedBlurBackdrop 页级采样路径不复存在；玻璃性能由上游方案接管，需真机验证卡顿。
           # P8: remove-update-popup（禁用启动自动更新弹窗；设置页手动检查保留，更新检测/下载指向本 fork 仓库）
           git show master:patches/remove-update-popup.patch > /tmp/p8.patch
           git apply --3way /tmp/p8.patch || git apply /tmp/p8.patch
           grep -q "fork 定制：禁用启动自动更新弹窗" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/CourseScheduleAppMainContent.kt || { echo "❌ P8 update-popup 标记缺失"; exit 1; }
           grep -q "xiaoxun007/NexioSchedule" androidApp/src/main/java/com/haooz/chedule/ui/utils/UpdateChecker.kt || { echo "❌ P8 update 端点指向 fork 标记缺失"; exit 1; }
-          # P9: diag + node-select（诊断快照全量节点/选中节点/预检/发送态/ACK 观测；发送前强制刷新 + 按名匹配 + 预检阻断 + 分级文案）
-          git show master:patches/nexio-push-diag-node-select.patch > /tmp/p9.patch
-          git apply --3way /tmp/p9.patch || git apply /tmp/p9.patch
-          grep -q "PushDiagnostics" "$WS" || { echo "❌ P9 diagnostics 快照标记缺失"; exit 1; }
-          grep -q "getDiagnostics" "$WS" || { echo "❌ P9 getDiagnostics 标记缺失"; exit 1; }
-          grep -q "manualOutcome" "$WS" || { echo "❌ P9 manualOutcome 标记缺失"; exit 1; }
-          grep -q "inFlightSentAt" "$WS" || { echo "❌ P9 sentAt 标记缺失"; exit 1; }
-          grep -q "ack timeout" "$WS" || { echo "❌ P9 ack timeout 标记缺失"; exit 1; }
-          grep -q "对端应用未被识别" "$WS" || { echo "❌ P9 预检分级文案标记缺失"; exit 1; }
-          grep -q "DiagRow" "$UI" || { echo "❌ P9 诊断面板行组件标记缺失"; exit 1; }
-          grep -q "WearableDiagNode" "$UI" || { echo "❌ P9 节点列表数据结构标记缺失"; exit 1; }
-          # P10: softglass liquidClear 兼容（方案 B）：上游 b1fa7373 引用了尚未随 SoftGlass 0.1.3 发布的
-          #     SoftGlassStyle.liquidClear() 扩展；移除两处调用与 import，保留 liquidRefraction 位移折射。
-          #     移除条件：SoftGlass 发布含 liquidClear 的版本（或上游移除该调用）后，删除本补丁块。
+          # P10: softglass liquidClear 兼容（方案 B）：移除上游尚未发布的 liquidClear() 调用与 import，保留位移折射。
           git show master:patches/nexio-softglass-liquidclear-compat.patch > /tmp/p10.patch
           git apply --3way /tmp/p10.patch || git apply /tmp/p10.patch
           GLASS_SURFACE=ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/main/ScheduleGlassSurface.kt
@@ -123,23 +115,19 @@ jobs:
           if grep -n "liquidClear" "$GLASS_SURFACE" "$MATERIAL_SETTINGS"; then
             echo "❌ P10 liquidClear 残留（应为 0）"; exit 1
           fi
-          # P12: P5 拉起恢复（路由级触发 + launchWearApp 首参改 nodeId + 30s 节流 + 拉起状态诊断）
-          git show master:patches/nexio-p5-launch-restore.patch > /tmp/p12.patch
-          git apply --3way /tmp/p12.patch || git apply /tmp/p12.patch
-          grep -q "lastLaunchState" "$WS" || { echo "❌ P12 拉起状态标记缺失"; exit 1; }
-          grep -q "onEnterExportScreen" ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/navigation/AppRoutes.kt || { echo "❌ P12 路由级拉起标记缺失"; exit 1; }
-          # P13: 发送失败退避重试（1s/2s，最多 2 次；ACK 超时不重试）
-          git show master:patches/nexio-push-retry.patch > /tmp/p13.patch
-          git apply --3way /tmp/p13.patch || git apply /tmp/p13.patch
+          # 退役：nexio-p5-launch-restore（旧 P12 路由级误触发）、nexio-push-preflight-launch（旧 P14 发送前拉起）、
+          #       nexio-push-retry / nexio-msg-listener-reliability / nexio-push-diag-node-select 已折叠进下方可靠性补丁。
+          # B: P5 门控拉起（进导出页且停导出 tab、栈顶 + RESUMED 上升沿，30s 节流，失败不阻断）
+          #    + P13 发送失败退避重试（1s/2s 最多 2 次，ACK 超时不重试）+ P15 消息监听可靠性。
+          git show master:patches/nexio-wearable-reliability.patch > /tmp/pb.patch
+          git apply --3way /tmp/pb.patch || git apply /tmp/pb.patch
+          grep -q "lastLaunchState" "$WS" || { echo "❌ P5 拉起状态标记缺失"; exit 1; }
           grep -q "RETRY_DELAY_MS" "$WS" || { echo "❌ P13 退避重试标记缺失"; exit 1; }
-          # P14: 推送前主动拉起手环 App（失败不阻断，留就绪窗口）
-          git show master:patches/nexio-push-preflight-launch.patch > /tmp/p14.patch
-          git apply --3way /tmp/p14.patch || git apply /tmp/p14.patch
-          grep -q "LAUNCH_READY_WAIT_SEC" "$WS" || { echo "❌ P14 推送前拉起标记缺失"; exit 1; }
-          # P15: 消息监听可靠性（绑定态观测 + 发送前补绑 + data 解包镜像 + 入站异常可见）
-          git show master:patches/nexio-msg-listener-reliability.patch > /tmp/p15.patch
-          git apply --3way /tmp/p15.patch || git apply /tmp/p15.patch
           grep -q "listenerBound" "$WS" || { echo "❌ P15 监听绑定标记缺失"; exit 1; }
+          # 硬校验：旧 P14 发送前拉起 / 旧 P12 nodeId 首参改造不得残留
+          if grep -q "LAUNCH_READY_WAIT_SEC\|preflightLaunch\|launchWearAppForNode" "$WS"; then
+            echo "❌ 旧 P14/P12 残留（应为 0）"; exit 1
+          fi
           echo "✅ 全部补丁应用并验证通过"
           git status --short
 
@@ -215,8 +203,8 @@ jobs:
           # 仅上传最终签名 APK（排除 aligned.apk 中间产物）
           path: androidApp/build/outputs/final/Nexio.v*.apk
 
-      - name: 发布 GitHub Release
-        if: steps.check.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+      - name: 发布 GitHub Release（仅勾选 publish_release 时执行；默认 dispatch 只产出 artifact）
+        if: github.event.inputs.publish_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -252,15 +240,15 @@ jobs:
               2. **手环推送诊断 + 节点选择 + 反馈**
                  - 诊断快照：全量在线节点、选中节点与匹配方式、缓存→刷新对比、对端应用预检结果、发送状态/错误原因/载荷字节/ACK 状态，面板只读展示
                  - 盲选修复：发送前强制刷新在线节点（缓存仅兜底），多绑定时按设备名启发式匹配目标手环；预检未识别到对端应用即阻断并分级报错
-                 - 导出页反馈 + 互联权限引导；未授予权限时跳转系统设置 / 小米运动健康；进入导出页尝试拉起手环端 App
+                 - 导出页反馈 + 互联权限引导；未授予权限时跳转系统设置 / 小米运动健康
                  - 改动：`WearableScheduleSync.kt`、`BackupAndMigrationScreen.kt`、路由层
               3. **移除统计上报**
                  - 安装/活跃上报在 `StatsReporter` 置为 no-op，不再向统计服务发请求（保留设备 ID 生成）
               4. **去掉启动自动更新弹窗**
                  - 启动时不再自动弹更新提示；设置页手动检查入口保留，更新跳转指向本 fork Releases
-              5. **推送链路可靠性（gh3）**
-                 - 导出页路由级触发拉起手环端 App（`launchWearApp` 首参修正为 nodeId，30s 节流，拉起状态面板可见）
-                 - 发送失败按 1s/2s 退避重试最多 2 次（ACK 超时不重试）；推送前主动拉起并留就绪窗口
+              5. **推送链路可靠性**
+                 - P5 门控拉起：仅当本页是栈顶目的地、Activity 前台 RESUMED 且停在导出 tab 的上升沿才拉起手环端 App，30s 节流，失败不阻断任何流程；拉起状态面板只读展示
+                 - 发送失败按 1s/2s 退避重试最多 2 次（ACK 超时不重试）
                  - 消息监听绑定态观测、发送前补绑、入站 `data` 嵌套解包与解析异常面板可见
               6. **玻璃性能**
                  - 上游已重写壁纸模糊金字塔 + shader 管线；旧的本地页级采样补丁已废弃，卡顿情况需真机验证
