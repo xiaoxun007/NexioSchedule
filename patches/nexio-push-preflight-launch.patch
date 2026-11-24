@@ -1,0 +1,3 @@
+# 退役（gh4 档位2）：旧 P14「发送前 preflight 拉起」已彻底移除。
+# 根因：冷启动 node-ready 自动补推链路在 proceedSend 前主动拉起手环，用户尚未进导出页即误触发。
+# 现状：启动期自动补推链路不再调用 launchWearApp；preflightLaunch / LAUNCH_READY_WAIT_SEC 已 0 残留。

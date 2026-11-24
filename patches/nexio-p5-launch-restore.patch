@@ -1,0 +1,2 @@
+# 退役（gh4 档位2）：旧 P12 路由级预组合触发 + launchWearApp 首参改 nodeId 的自造部分已删除。
+# 现状：explainFailure 首参恢复上游原文包名；P5 语义改由 nexio-wearable-reliability.patch 严格门控承载。
