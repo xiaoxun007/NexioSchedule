@@ -335,7 +335,15 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteCo
  import androidx.lifecycle.viewmodel.compose.viewModel
  import com.haooz.chedule.calendar.rememberCalendarSyncAction
  import com.haooz.chedule.data.platform.showToast
-@@ -367,9 +369,21 @@
+@@ -306,6 +308,7 @@
+     switchable: Boolean = false,
+ ) {
+     val context = LocalContext.current
++    val activity = LocalActivity.current
+     val shareScope = rememberCoroutineScope()
+     BackupAndMigrationRoute(
+         router = router,
+@@ -367,9 +370,21 @@
                  nodeIdChanged = d.nodeIdChanged,
                  payloadBytes = d.payloadBytes,
                  ackState = d.ackState,
@@ -351,7 +359,7 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteCo
 +        // 被其它子页盖住 / 退到后台时为 false，门控不触发。
 +        isRouteVisible = {
 +            router.current == AppRoute.ImportExport &&
-+                (LocalActivity.current as? LifecycleOwner)?.lifecycle?.currentState
++                (activity as? LifecycleOwner)?.lifecycle?.currentState
 +                    ?.isAtLeast(Lifecycle.State.RESUMED) != false
 +        },
          onOpenWearPermissionSettings = { openWearPermissionSettings(context) },
