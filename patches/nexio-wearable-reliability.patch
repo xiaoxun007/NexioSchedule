@@ -258,7 +258,7 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableSchedul
      private fun startNodeWatcher() {
          val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
          exec.scheduleWithFixedDelay({
-@@ -738,5 +869,64 @@
+@@ -738,5 +869,77 @@
          nodeIdChanged = nodeIdChanged,
          payloadBytes = diagPayloadBytes,
          ackState = ackState,
@@ -271,7 +271,11 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableSchedul
 +    /**
 +     * P5：进入导出页且停在导出 tab 时，由 UI 层门控上升沿调用（后台线程；不弹 UI、不阻断导出/推送流程）。
 +     * 权限未授予/无节点/未安装/调用失败均只写入 [lastLaunchState]，供诊断面板只读展示。
-+     * 首参按上游 1.7.3 原文传包名（appContext.packageName），二参为手环首页路由。
++     *
++     * 首参语义（真机实证，勿再被「对齐上游」误导回退）：
++     * - 本门控入口传节点 id（nodeId）：gh4 照搬上游传包名，服务端按 nodeId 解析返回
++     *   `app not installed`；gh3 传 nodeId 时手环可被拉起，反证此路径首参应为节点 id。
++     * - 上游 [explainFailure] 自愈路径保持上游原样（包名首参），不在本入口改动范围。
 +     */
 +    fun launchWearScheduleApp(context: Context) {
 +        if (!initialized.get()) init(context)
@@ -282,16 +286,23 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableSchedul
 +                    lastLaunchState = "跳过：权限未授予"
 +                    return@execute
 +                }
-+                if (resolveNodeId() == null) {
++                val targetId = resolveNodeId()
++                if (targetId == null) {
 +                    lastLaunchState = "跳过：无在线节点"
++                    peerInstalled = null
++                    peerCheckError = "无在线节点"
 +                    return@execute
 +                }
 +                val api = nodeApi ?: run {
 +                    lastLaunchState = "跳过：节点 API 不可用"
 +                    return@execute
 +                }
-+                api.isWearAppInstalled(appContext.packageName)
++                // 只读预检：仅刷新面板「对端应用」三态（已安装/未安装/未查询），
++                // 不阻断导出、不参与门控触发判断、不进入 P13 退避重试条件。
++                api.isWearAppInstalled(targetId)
 +                    .addOnSuccessListener { installed ->
++                        peerInstalled = installed
++                        peerCheckError = ""
 +                        if (installed != true) {
 +                            lastLaunchState = "跳过：对端应用未安装"
 +                            return@addOnSuccessListener
@@ -302,10 +313,10 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableSchedul
 +                            return@addOnSuccessListener
 +                        }
 +                        lastLaunchAt = now
-+                        api.launchWearApp(appContext.packageName, WATCH_ROUTE)
++                        api.launchWearApp(targetId, WATCH_ROUTE)
 +                            .addOnSuccessListener {
 +                                lastLaunchState = "成功"
-+                                NexioLog.i(TAG, "launchWearApp ok (entry): $WATCH_ROUTE")
++                                NexioLog.i(TAG, "launchWearApp ok (entry): node=$targetId route=$WATCH_ROUTE")
 +                            }
 +                            .addOnFailureListener { e ->
 +                                lastLaunchState = "失败：${e.message ?: "未知错误"}"
@@ -313,6 +324,8 @@ diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableSchedul
 +                            }
 +                    }
 +                    .addOnFailureListener { e ->
++                        peerInstalled = null
++                        peerCheckError = e.message ?: "查询失败"
 +                        lastLaunchState = "跳过：未安装预检失败（${e.message ?: ""}）"
 +                        NexioLog.w(TAG, "isWearAppInstalled fail: ${e.message}")
 +                    }
@@ -431,7 +444,19 @@ diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/Bac
              if (mode == ScheduleDataManageMode.Export) {
                  pushDiag = wearableDiag()
              }
-@@ -732,6 +739,18 @@
+@@ -703,9 +710,8 @@
+                                 // —— 预检组 ——
+                                 DiagGroup("预检")
+                                 val peerValue = when {
+-                                    diag.peerInstalled == true -> "已识别"
+-                                    diag.peerInstalled == false -> "未识别"
+-                                    diag.peerCheckError.isNotEmpty() -> "查询失败：${diag.peerCheckError}"
++                                    diag.peerInstalled == true -> "已安装"
++                                    diag.peerInstalled == false -> "未安装"
+                                     else -> "未查询"
+                                 }
+                                 DiagRow("对端应用", peerValue, topPad = 2.dp)
+@@ -732,6 +738,18 @@
                                  DiagRow("上次推送", diag.lastPushAtText.ifEmpty { "暂无记录" })
                                  DiagRow("排队队列", if (diag.pendingQueued) "有课表待补推" else "无")
                                  DiagRow("互联权限", if (diag.permissionGranted) "已授予" else "未授予")
