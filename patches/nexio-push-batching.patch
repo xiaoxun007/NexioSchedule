@@ -1,0 +1,477 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+index c6ded13e..5ec3a699 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+@@ -377,6 +377,7 @@ private fun AndroidBackupAndMigrationRoute(
+                 measureFullBytes = d.measureFullBytes,
+                 measureDateCount = d.measureDateCount,
+                 measureMaxDateBytes = d.measureMaxDateBytes,
++                batchStatusText = d.batchStatusText,
+                 lastPushAtText = if (d.lastPushAt > 0L) fmt.format(d.lastPushAt) else "",
+             )
+         },
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
+index 1f5f4ae4..1e682d99 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
+@@ -93,6 +93,15 @@ object WatchPayload {
+      */
+     const val MAX_PAYLOAD_BYTES = 48 * 1024
+ 
++    /** gh6 P1：分批目标字节数。整包 ≤ 此值时走原整表单包路径，不拆批。 */
++    const val BATCH_TARGET_BYTES = 10_000
++
++    /** gh6 P1：单批硬上限。任一日期条目超此值整轮失败，不静默截断。 */
++    const val BATCH_MAX_BYTES_HARD = 32_000
++
++    /** gh6 P1：手环端日期键条数上限（对应手环 DATE_KEEP_MAX）；超限整轮失败明示。 */
++    const val DATE_MAX_ENTRIES = 400
++
+     /** `,"overrides":[]` 这层信封本身的字节余量。 */
+     private const val OVERRIDES_ENVELOPE_BYTES = 64
+ 
+@@ -286,6 +295,182 @@ object WatchPayload {
+             .put("courses", courses)
+     }
+ 
++    // ── gh6 P1：按日期分批编排（days 模式；整表 JSON 结构与 buildFullJson 互不影响） ──
++
++    /** 单批编排结果：json 文本 / UTF-8 字节数 / 是否首批 / 本批日期键。 */
++    data class DayBatchPayload(
++        val json: String,
++        val bytes: Int,
++        val isFirst: Boolean,
++        val dateKeys: List<String>,
++    )
++
++    /** 分批结果：成功给出批次列表；失败给出明确原因（不静默截断、不降级裁包）。 */
++    sealed interface DayBatchResult {
++        data class Success(val batches: List<DayBatchPayload>) : DayBatchResult
++        data class Failure(val reason: String) : DayBatchResult
++    }
++
++    /**
++     * 把整学期课表按日期贪心装箱成多个 [DayBatchPayload]。
++     *
++     * 协议口径（与手环 `setDateSchedule` / `normalizeDateDay` 对齐）：
++     * - 逐条日期条目 `{date, courses:[{id,name,startTime,endTime,periods,section,location,teacher}],
++     *   week, holiday, isHoliday, isWorkSwap}`；
++     * - 首批 `action=replace` 带 `settings`/`times`/完整 `holidays`；后续批 `action=upsert`，
++     *   每批都重复携带完整 `holidays`（手环每条消息结尾都会用它覆盖假期表）；
++     * - 分批消息绝不出 `courses` 字段（命中整表分支会触发整体重建）；
++     * - 上次有、本次没有的日期补 `{date, courses: []}` 空条目清残留。
++     *
++     * @param lastDates 本地持久化的「上次推送日期集」，用于补空条目。
++     */
++    fun buildDayBatches(
++        repository: CourseRepository,
++        context: Context,
++        scheduleId: String = "",
++        lastDates: Set<String> = emptySet(),
++    ): DayBatchResult {
++        val sid = scheduleId.ifEmpty { repository.getCurrentScheduleId() }
++        val today = todayLocalDate()
++        val (windowFirst, windowLast) = holidayWindow(repository, sid, today)
++        val entriesByYear = HolidayManager.loadAllByYearFor(sid)
++
++        // 1) 逐日展开成本轮日期条目
++        val entries = mutableListOf<JSONObject>()
++        val currentKeys = mutableListOf<String>()
++        var d = windowFirst
++        while (d <= windowLast) {
++            val resolution = runCatching {
++                DayScheduleResolver.resolveDaySchedule(d, repository, entriesByYear)
++            }.getOrNull() ?: continue
++            entries.add(renderDayEntry(d, resolution, entriesByYear, repository, sid))
++            currentKeys.add(d.toString())
++            d = d.plusDays(1)
++        }
++
++        // 2) 上次有、本次没有的日期 → 空条目清残留（手环按日期覆盖写，不清空已有日期）
++        for (old in lastDates) {
++            if (old !in currentKeys) {
++                entries.add(JSONObject().put("date", old).put("courses", JSONArray()))
++            }
++        }
++
++        // 3) 日期条数上限（手环 DATE_KEEP_MAX=400）
++        if (entries.size > DATE_MAX_ENTRIES) {
++            return DayBatchResult.Failure("日期条目 ${entries.size} 个超过上限 $DATE_MAX_ENTRIES")
++        }
++
++        // 4) 贪心装箱：同一日期绝不拆；累加超目标即封批；单日期超目标独占一批；
++        //    单日期超硬上限整轮失败（不静默截断）。
++        val batches = mutableListOf<MutableList<JSONObject>>()
++        var current = mutableListOf<JSONObject>()
++        var currentBytes = 0
++        for (entry in entries) {
++            val entryBytes = entry.toString().toByteArray(Charsets.UTF_8).size
++            if (entryBytes > BATCH_MAX_BYTES_HARD) {
++                return DayBatchResult.Failure(
++                    "单日期 ${entry.optString("date")} 体积 ${entryBytes}B 超过硬上限 $BATCH_MAX_BYTES_HARD"
++                )
++            }
++            if (current.isNotEmpty() && currentBytes + entryBytes > BATCH_TARGET_BYTES) {
++                batches.add(current)
++                current = mutableListOf()
++                currentBytes = 0
++            }
++            current.add(entry)
++            currentBytes += entryBytes
++            if (entryBytes > BATCH_TARGET_BYTES) {
++                batches.add(current)
++                current = mutableListOf()
++                currentBytes = 0
++            }
++        }
++        if (current.isNotEmpty()) batches.add(current)
++        if (batches.isEmpty()) return DayBatchResult.Failure("无可下发的日期条目")
++
++        // 5) 组包：首批 replace 带 settings/times；后续 upsert；每批都带完整 holidays
++        val settings = JSONObject()
++            .put("class_start_time", repository.getClassStartTime(sid))
++            .put("current_week", repository.getLiveTeachingWeek(scheduleId = sid))
++            .put("total_weeks", repository.getTotalWeeks(sid))
++            .put("morning_sections", repository.getMorningSections(sid))
++            .put("afternoon_sections", repository.getAfternoonSections(sid))
++            .put("evening_sections", repository.getEveningSections(sid))
++            .put("pre_class_reminder_minutes", repository.getPreClassReminderMinutes())
++        val times = JSONObject()
++            .put("morning", periodTimesJson(repository, "morning", sid))
++            .put("afternoon", periodTimesJson(repository, "afternoon", sid))
++            .put("evening", periodTimesJson(repository, "evening", sid))
++        val flatHolidays = HolidayEntries.forFlatPush(
++            entriesByYear = entriesByYear,
++            today = today,
++            windowFirst = windowFirst,
++            windowLast = windowLast,
++        )
++        val holidaysArr = buildHolidaysJson(flatHolidays)
++
++        val sentAtBase = System.currentTimeMillis()
++        val payloads = batches.mapIndexed { index, dayEntries ->
++            val payload = JSONObject()
++                .put("protocol", PROTOCOL)
++                .put("version", 4)
++                .put("action", if (index == 0) "replace" else "upsert")
++                .put("sentAt", sentAtBase + index)
++                .put("schedule_name", sid)
++                .put("holidays", holidaysArr)
++                .put("days", JSONArray(dayEntries))
++            if (index == 0) {
++                payload.put("settings", settings).put("times", times)
++            }
++            val json = payload.toString()
++            DayBatchPayload(
++                json = json,
++                bytes = json.toByteArray(Charsets.UTF_8).size,
++                isFirst = index == 0,
++                dateKeys = dayEntries.map { it.optString("date") },
++            )
++        }
++        return DayBatchResult.Success(payloads)
++    }
++
++    /**
++     * 单日条目 → 手环 days 模式条目。课程时间按当日作息解析成真实 startTime/endTime；
++     * 周次/选周等字段不进 days 条目（weeks+upsert 路线会丢这些字段，已否决）。
++     */
++    private fun renderDayEntry(
++        date: LocalDate,
++        resolution: DayScheduleResolver.DayScheduleResolution,
++        entriesByYear: Map<Int, List<HolidayEntry>>,
++        repository: CourseRepository,
++        scheduleId: String,
++    ): JSONObject {
++        val config = repository.getTimeConfig(repository.getScheduleTimeConfigId(scheduleId))
++        val ctx = DayContext(config.effective(date))
++        val courses = JSONArray()
++        for (course in resolution.courses) {
++            val start = CourseTimeResolver.getStartTime(course, ctx)
++            val end = CourseTimeResolver.getEndTime(course, ctx)
++            courses.put(
++                JSONObject()
++                    .put("id", course.id)
++                    .put("name", course.name)
++                    .put("startTime", start ?: "")
++                    .put("endTime", end ?: "")
++                    .put("periods", course.getSectionText())
++                    .put("section", course.startSection)
++                    .put("location", course.classroom ?: "")
++                    .put("teacher", course.teacher ?: "")
++            )
++        }
++        return JSONObject()
++            .put("date", date.toString())
++            .put("week", resolution.displayWeek)
++            .put("holiday", holidayNameForDate(entriesByYear, date))
++            .put("isHoliday", resolution.isHolidayDate)
++            .put("isWorkSwap", resolution.isWorkSwap)
++            .put("courses", courses)
++    }
++
+     /**
+      * 把 overrides 裁进单包字节预算内。
+      *
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+index 935ffc9e..a69ee95c 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -6,6 +6,7 @@ import android.os.Looper
+ import com.haooz.chedule.data.platform.NexioLog
+ import com.haooz.chedule.data.platform.showToast
+ import com.haooz.chedule.data.repo.CourseRepository
++import com.haooz.chedule.data.storage.AppStorage
+ import com.xiaomi.xms.wearable.Wearable
+ import com.xiaomi.xms.wearable.auth.AuthApi
+ import com.xiaomi.xms.wearable.auth.Permission
+@@ -55,6 +56,8 @@ data class PushDiagnostics(
+     val measureFullBytes: Int = 0,
+     val measureDateCount: Int = 0,
+     val measureMaxDateBytes: Int = 0,
++    // gh6 P1 分批状态（只读展示）
++    val batchStatusText: String = "",
+ )
+ 
+ /**
+@@ -158,6 +161,18 @@ object WearableScheduleSync {
+     @Volatile private var diagMeasureDateCount: Int = 0
+     @Volatile private var diagMeasureMaxDateBytes: Int = 0
+ 
++    // ---- gh6 P1 分批推送编排（ACK 回调链推进；禁止 sleep/while 等 ACK） ----
++    @Volatile private var batchRoundActive: Boolean = false
++    @Volatile private var batchTotal: Int = 0
++    @Volatile private var batchIndex: Int = 0
++    private var batchPayloads: List<WatchPayload.DayBatchPayload> = emptyList()
++    @Volatile private var batchReason: String = ""
++    @Volatile private var batchScheduleName: String = ""
++    @Volatile private var batchNodeId: String = ""
++    @Volatile private var batchOnResult: ((Boolean, String) -> Unit)? = null
++    @Volatile private var batchRetryCount: Int = 0
++    @Volatile private var diagBatchStatus: String = ""
++
+     // ---- P5 拉起状态 ----
+     @Volatile private var lastLaunchState: String = ""
+     @Volatile private var lastLaunchAt: Long = 0L
+@@ -275,7 +290,12 @@ object WearableScheduleSync {
+                         lastPushOutcome = "成功（已收到手环确认）"
+                         lastPushAt = System.currentTimeMillis()
+                         NexioLog.i(TAG, "push ack confirmed, sentAt=$ackSentAt")
+-                        if (manualInFlight) fireManualOutcome(true, "")
++                        if (batchRoundActive) {
++                            // 分批轮：ACK 回调链推进下一批，收口在 advanceBatch/finishRound
++                            advanceBatch()
++                        } else if (manualInFlight) {
++                            fireManualOutcome(true, "")
++                        }
+                     } else {
+                         NexioLog.i(TAG, "ignore ack sentAt=$ackSentAt expected=$expected")
+                     }
+@@ -518,6 +538,11 @@ object WearableScheduleSync {
+             }.getOrDefault(emptyMap())
+             diagMeasureDateCount = measureBuckets.size
+             diagMeasureMaxDateBytes = measureBuckets.values.maxOrNull() ?: 0
++            // 渐进降级：整包 ≤ 目标字节时完全走原整表单包路径；超阈值才进入分批轮。
++            if (payloadBytes > WatchPayload.BATCH_TARGET_BYTES) {
++                startBatchRound(repo, reason, scheduleName, id, onResult)
++                return
++            }
+             sendState = "UNKNOWN"
+             sendError = ""
+             ackState = "NONE"
+@@ -620,6 +645,152 @@ object WearableScheduleSync {
+         pendingRetryScheduleName = ""
+     }
+ 
++    // ── gh6 P1：分批推送编排 ────────────────────────────────────────────────
++    // 推进方式：sendMessage 成功 → 等手环 ACK → ACK 回调里 advanceBatch() 发下一批；
++    // 全程回调链驱动，禁止 Thread.sleep / while 等 ACK。锁释放只走 [finishRound] 一个出口。
++
++    /** 进入分批轮：组装批次，失败直接收敛到 [finishRound]；成功从第 0 批开始发。 */
++    private fun startBatchRound(
++        repo: CourseRepository,
++        reason: String,
++        scheduleName: String,
++        id: String,
++        onResult: ((Boolean, String) -> Unit)?,
++    ) {
++        batchReason = reason
++        batchScheduleName = scheduleName
++        batchNodeId = id
++        batchOnResult = onResult
++        batchRetryCount = 0
++        val sid = scheduleName.ifEmpty { repo.getCurrentScheduleId() }
++        val lastDates = readLastBatchDates(sid)
++        val result = runCatching {
++            WatchPayload.buildDayBatches(repo, appContext, scheduleName, lastDates)
++        }.getOrElse {
++            WatchPayload.DayBatchResult.Failure("分批组装异常：${it.message ?: "未知错误"}")
++        }
++        when (result) {
++            is WatchPayload.DayBatchResult.Failure -> finishRound(false, result.reason)
++            is WatchPayload.DayBatchResult.Success -> {
++                batchPayloads = result.batches
++                batchTotal = result.batches.size
++                batchIndex = 0
++                batchRoundActive = true
++                NexioLog.i(TAG, "batch round start, total=$batchTotal")
++                sendBatch(0)
++            }
++        }
++    }
++
++    /** 发送第 index 批；通道失败走批级退避重试（1s/2s × MAX_RETRY，每批独立计数）。 */
++    private fun sendBatch(index: Int) {
++        val batch = batchPayloads.getOrNull(index) ?: run {
++            finishRound(false, "批次 $index 不存在")
++            return
++        }
++        batchIndex = index
++        val api = messageApi ?: run {
++            finishRound(false, "手环消息通道不可用")
++            return
++        }
++        inFlightSentAt = try {
++            JSONObject(batch.json).optLong("sentAt", -1L)
++        } catch (e: Exception) {
++            -1L
++        }
++        diagPayloadBytes = batch.bytes
++        sendState = "UNKNOWN"
++        sendError = ""
++        ackState = "NONE"
++        diagBatchStatus = "第 ${index + 1}/$batchTotal 批 · ${batch.bytes} B · 发送中"
++        ensureListenerBound(batchNodeId)
++        api.sendMessage(batchNodeId, batch.json.toByteArray(Charsets.UTF_8))
++            .addOnSuccessListener {
++                NexioLog.i(TAG, "batch ${index + 1}/$batchTotal sent, bytes=${batch.bytes}")
++                armAckTimeout(batchReason)
++            }
++            .addOnFailureListener { e ->
++                val detail = e.message ?: "sendMessage failed"
++                NexioLog.w(TAG, "batch ${index + 1}/$batchTotal send fail: $detail")
++                if (batchRetryCount < MAX_RETRY) {
++                    batchRetryCount += 1
++                    sendState = "RETRY"
++                    sendError = "第 ${index + 1}/$batchTotal 批发送失败，第 ${batchRetryCount}/${MAX_RETRY} 次重试：$detail"
++                    diagBatchStatus = "第 ${index + 1}/$batchTotal 批 · ${batch.bytes} B · 重试 ${batchRetryCount}/$MAX_RETRY"
++                    cancelAckTimeout()
++                    val delay = RETRY_DELAY_MS[(batchRetryCount - 1).coerceAtMost(RETRY_DELAY_MS.size - 1)]
++                    val exec = scheduler ?: Executors.newSingleThreadScheduledExecutor().also { scheduler = it }
++                    cancelPendingRetry()
++                    retryFuture = exec.schedule({ sendBatch(index) }, delay, TimeUnit.MILLISECONDS)
++                } else {
++                    finishRound(false, "第 ${index + 1}/$batchTotal 批推送失败：$detail")
++                }
++            }
++    }
++
++    /** ACK 命中当前批后推进：还有下一批就发下一批，否则整轮成功收口。 */
++    private fun advanceBatch() {
++        val next = batchIndex + 1
++        diagBatchStatus = "第 ${batchIndex + 1}/$batchTotal 批 · 成功"
++        if (next < batchTotal) {
++            batchIndex = next
++            sendBatch(next)
++        } else {
++            finishRound(true, "分批推送完成（$batchTotal 批）")
++        }
++    }
++
++    /**
++     * 分批轮唯一收口：整轮成功 / 任一批重试后仍失败 / 异常 / ACK 超时 / 取消，全部只从这里出去。
++     * 释放推送槽、清批次状态、回传结果；成功后把本轮日期集写回本地持久化。
++     */
++    private fun finishRound(ok: Boolean, message: String) {
++        val total = batchTotal
++        val dateKeys = batchPayloads.flatMap { it.dateKeys }.toSet()
++        cancelAckTimeout()
++        cancelPendingRetry()
++        inFlightSentAt = -1L
++        batchRoundActive = false
++        batchPayloads = emptyList()
++        batchTotal = 0
++        batchIndex = 0
++        batchRetryCount = 0
++        if (ok) {
++            sendState = "SUCCESS"
++            sendError = ""
++            lastPushOutcome = "成功（分批 ${total} 批已确认）"
++            lastPushAt = System.currentTimeMillis()
++            diagBatchStatus = "第 $total/$total 批 · 完成"
++            persistLastBatchDates(dateKeys)
++        } else {
++            sendState = "FAILED"
++            sendError = message
++            lastPushOutcome = "推送失败：$message"
++            lastPushAt = System.currentTimeMillis()
++            diagBatchStatus = "第 ${batchIndex + 1}/$total 批推送失败：$message"
++        }
++        releasePushSlot()
++        deliver(batchOnResult, ok, message)
++        batchOnResult = null
++        if (batchReason == "manual-export") fireManualOutcome(ok, message)
++    }
++
++    /** 读取上次推送日期集（`last_batch_dates_<scheduleId>`）；无记录返回空集。 */
++    private fun readLastBatchDates(scheduleId: String): Set<String> = runCatching {
++        AppStorage.store("course_schedule_prefs")
++            .getStringSet("last_batch_dates_$scheduleId", emptySet())
++    }.getOrDefault(emptySet())
++
++    /** 成功后写回本轮日期集，供下一轮补空条目清残留。 */
++    private fun persistLastBatchDates(dateKeys: Set<String>) {
++        runCatching {
++            val sid = batchScheduleName.ifEmpty { CourseRepository.getInstance().getCurrentScheduleId() }
++            AppStorage.store("course_schedule_prefs").edit {
++                putStringSet("last_batch_dates_$sid", dateKeys)
++            }
++        }.onFailure { NexioLog.w(TAG, "persist last batch dates fail: ${it.message}") }
++    }
++
+     /** 统一记录一次发送失败到诊断快照并释放推送槽。 */
+     private fun recordSendFailure(
+         detail: String,
+@@ -650,6 +821,10 @@ object WearableScheduleSync {
+             sendError = "已送达但确认超时"
+             lastPushOutcome = "已送达但确认超时（手环未回 ACK）"
+             lastPushAt = System.currentTimeMillis()
++            // 分批轮中 ACK 超时同样收口到 finishRound（不重试、不继续推下一批）
++            if (batchRoundActive) {
++                finishRound(false, "第 ${batchIndex + 1}/$batchTotal 批确认超时")
++            }
+         }, ACK_TIMEOUT_SEC, TimeUnit.SECONDS)
+     }
+ 
+@@ -892,6 +1067,7 @@ object WearableScheduleSync {
+         measureFullBytes = diagMeasureFullBytes,
+         measureDateCount = diagMeasureDateCount,
+         measureMaxDateBytes = diagMeasureMaxDateBytes,
++        batchStatusText = diagBatchStatus,
+     )
+ 
+     /**
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+index 7056d45e..284aa35c 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -138,6 +138,8 @@ data class WearableDiag(
+     val measureFullBytes: Int = 0,
+     val measureDateCount: Int = 0,
+     val measureMaxDateBytes: Int = 0,
++    // gh6 P1 分批状态（只读展示）
++    val batchStatusText: String = "",
+     val lastPushAtText: String = "",
+ )
+ 
+@@ -737,6 +739,10 @@ fun BackupAndMigrationScreen(
+                                 DiagRow("整包大小", if (diag.measureFullBytes > 0) "${diag.measureFullBytes} B" else "—")
+                                 DiagRow("日期条目", if (diag.measureDateCount > 0) "${diag.measureDateCount} 个" else "—")
+                                 DiagRow("最大单日期", if (diag.measureMaxDateBytes > 0) "${diag.measureMaxDateBytes} B" else "—")
++                                // gh6 P1：分批推送状态（只读）
++                                if (diag.batchStatusText.isNotEmpty()) {
++                                    DiagRow("分批进度", diag.batchStatusText)
++                                }
+                                 val ackValue = when (diag.ackState) {
+                                     "ACKED" -> "已确认"
+                                     "TIMEOUT" -> "超时"

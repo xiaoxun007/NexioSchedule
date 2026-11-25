@@ -85,6 +85,7 @@ jobs:
           mkdir -p signing
           git show master:signing/debug.keystore.b64 > signing/debug.keystore.b64
           WS=androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+          WP=androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
           UI=ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
           DND=androidApp/src/main/java/com/haooz/chedule/reminder/ClassDndHelper.kt
           # P1: class-dnd（下课保持勿扰，不自动恢复）
@@ -127,6 +128,25 @@ jobs:
           # 硬校验：旧 P14 发送前拉起 / 旧 P12 nodeId 首参改造不得残留
           if grep -q "LAUNCH_READY_WAIT_SEC\|preflightLaunch\|launchWearAppForNode" "$WS"; then
             echo "❌ 旧 P14/P12 残留（应为 0）"; exit 1
+          fi
+          # gh6 P0: 只读体积测量（整包字节 / 日期条目 / 最大单日期；纯观测，不接发送逻辑）
+          git show master:patches/nexio-push-batching-measure.patch > /tmp/pg6m.patch
+          git apply --3way /tmp/pg6m.patch || git apply /tmp/pg6m.patch
+          grep -q "measureFullBytes" "$WP" || { echo "❌ gh6 整包测量标记缺失"; exit 1; }
+          grep -q "bucketBytesByDate" "$WP" || { echo "❌ gh6 日期分桶标记缺失"; exit 1; }
+          # gh6 P1: 大课表按日期分批推送（days 模式；首批 replace 带 settings/times/holidays，
+          #         后续 upsert 每批重复携带完整 holidays；分批消息不含 courses）
+          git show master:patches/nexio-push-batching.patch > /tmp/pg6b.patch
+          git apply --3way /tmp/pg6b.patch || git apply /tmp/pg6b.patch
+          grep -q "BATCH_TARGET_BYTES" "$WP" || { echo "❌ gh6 分批目标字节常量缺失"; exit 1; }
+          grep -q "BATCH_MAX_BYTES_HARD" "$WP" || { echo "❌ gh6 单批硬上限常量缺失"; exit 1; }
+          grep -q "DATE_MAX_ENTRIES" "$WP" || { echo "❌ gh6 日期条数上限常量缺失"; exit 1; }
+          grep -q "buildDayBatches" "$WP" || { echo "❌ gh6 分批组装入口缺失"; exit 1; }
+          grep -q "batchIndex" "$WS" || { echo "❌ gh6 批次推进索引缺失"; exit 1; }
+          grep -q "last_batch_dates_" "$WS" || { echo "❌ gh6 上次日期集持久化键缺失"; exit 1; }
+          # 残留校验：旧 preflight 拉起 / LAUNCH_READY_WAIT_SEC 必须为 0（liquidClear 由上方 P10 块校验）
+          if grep -q "preflight\|LAUNCH_READY_WAIT_SEC" "$WS"; then
+            echo "❌ 旧 P14 preflight/等待常量残留（应为 0）"; exit 1
           fi
           echo "✅ 全部补丁应用并验证通过"
           git status --short

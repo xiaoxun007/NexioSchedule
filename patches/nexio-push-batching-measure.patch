@@ -1,0 +1,170 @@
+diff --git a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+index b610a312..c6ded13e 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/ui/navigation/AppRouteContent.kt
+@@ -374,6 +374,9 @@ private fun AndroidBackupAndMigrationRoute(
+                 listenerBound = d.listenerBound,
+                 lastBindError = d.lastBindError,
+                 lastInboundError = d.lastInboundError,
++                measureFullBytes = d.measureFullBytes,
++                measureDateCount = d.measureDateCount,
++                measureMaxDateBytes = d.measureMaxDateBytes,
+                 lastPushAtText = if (d.lastPushAt > 0L) fmt.format(d.lastPushAt) else "",
+             )
+         },
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
+index 1b8a2384..1f5f4ae4 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
+@@ -218,6 +218,74 @@ object WatchPayload {
+         return json
+     }
+ 
++    // ── gh6 P0：只读体积测量（纯观测，不接发送逻辑、不改 buildFullJson 输出） ──────
++
++    /**
++     * 整包 UTF-8 字节数（只读测量）。
++     *
++     * 复用 [buildFullJson] 的完整组装逻辑，只统计 UTF-8 字节，不发送、不落盘；
++     * 供诊断面板观测整包体积，不能用于发送路径的任何决策。
++     */
++    fun measureFullBytes(
++        repository: CourseRepository,
++        context: Context,
++        scheduleId: String = "",
++    ): Int = buildFullJson(repository, context, scheduleId)
++        .toByteArray(Charsets.UTF_8).size
++
++    /**
++     * 按日期条目统计字节（只读测量）：`date` → 该日条目 JSON 的 UTF-8 字节数。
++     *
++     * 展开口径与分批编排一致（[DayScheduleResolver] 逐日裁决），仅供诊断面板观测
++     * 「日期条目数 / 最大单日期字节」；不参与发送。
++     */
++    fun bucketBytesByDate(
++        repository: CourseRepository,
++        context: Context,
++        scheduleId: String = "",
++    ): Map<String, Int> {
++        val sid = scheduleId.ifEmpty { repository.getCurrentScheduleId() }
++        val today = todayLocalDate()
++        val (windowFirst, windowLast) = holidayWindow(repository, sid, today)
++        val entriesByYear = HolidayManager.loadAllByYearFor(sid)
++        val buckets = LinkedHashMap<String, Int>()
++        var d = windowFirst
++        while (d <= windowLast) {
++            val resolution = runCatching {
++                DayScheduleResolver.resolveDaySchedule(d, repository, entriesByYear)
++            }.getOrNull()
++            if (resolution != null) {
++                buckets[d.toString()] =
++                    renderMeasureDay(d, resolution).toString().toByteArray(Charsets.UTF_8).size
++            }
++            d = d.plusDays(1)
++        }
++        return buckets
++    }
++
++    /** 测量用的单日条目（结构与分批消息的日期条目同构）；只序列化算字节。 */
++    private fun renderMeasureDay(
++        date: LocalDate,
++        resolution: DayScheduleResolver.DayScheduleResolution,
++    ): JSONObject {
++        val courses = JSONArray()
++        for (course in resolution.courses) {
++            courses.put(
++                JSONObject()
++                    .put("id", course.id)
++                    .put("name", course.name)
++                    .put("location", course.classroom ?: "")
++                    .put("teacher", course.teacher ?: "")
++            )
++        }
++        return JSONObject()
++            .put("date", date.toString())
++            .put("week", resolution.displayWeek)
++            .put("isHoliday", resolution.isHolidayDate)
++            .put("isWorkSwap", resolution.isWorkSwap)
++            .put("courses", courses)
++    }
++
+     /**
+      * 把 overrides 裁进单包字节预算内。
+      *
+diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+index f3605440..935ffc9e 100644
+--- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
++++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
+@@ -51,6 +51,10 @@ data class PushDiagnostics(
+     val listenerBound: Boolean = false,
+     val lastBindError: String = "",
+     val lastInboundError: String = "",
++    // gh6 P0 只读体积测量
++    val measureFullBytes: Int = 0,
++    val measureDateCount: Int = 0,
++    val measureMaxDateBytes: Int = 0,
+ )
+ 
+ /**
+@@ -149,6 +153,11 @@ object WearableScheduleSync {
+     @Volatile private var diagPayloadBytes: Int = 0
+     @Volatile private var ackState: String = "NONE"
+ 
++    // ---- gh6 P0 只读体积测量（诊断面板观测用，不参与发送决策） ----
++    @Volatile private var diagMeasureFullBytes: Int = 0
++    @Volatile private var diagMeasureDateCount: Int = 0
++    @Volatile private var diagMeasureMaxDateBytes: Int = 0
++
+     // ---- P5 拉起状态 ----
+     @Volatile private var lastLaunchState: String = ""
+     @Volatile private var lastLaunchAt: Long = 0L
+@@ -502,6 +511,13 @@ object WearableScheduleSync {
+             }
+             inFlightSentAt = sentAt
+             diagPayloadBytes = payloadBytes
++            // gh6 P0：只读体积测量（整包字节 / 日期条目数 / 最大单日期字节），仅写诊断快照
++            diagMeasureFullBytes = payloadBytes
++            val measureBuckets = runCatching {
++                WatchPayload.bucketBytesByDate(repo, appContext, scheduleName)
++            }.getOrDefault(emptyMap())
++            diagMeasureDateCount = measureBuckets.size
++            diagMeasureMaxDateBytes = measureBuckets.values.maxOrNull() ?: 0
+             sendState = "UNKNOWN"
+             sendError = ""
+             ackState = "NONE"
+@@ -873,6 +889,9 @@ object WearableScheduleSync {
+         listenerBound = listenerBound,
+         lastBindError = lastBindError,
+         lastInboundError = lastInboundError,
++        measureFullBytes = diagMeasureFullBytes,
++        measureDateCount = diagMeasureDateCount,
++        measureMaxDateBytes = diagMeasureMaxDateBytes,
+     )
+ 
+     /**
+diff --git a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+index 650f8fe7..7056d45e 100644
+--- a/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
++++ b/ui-shared/src/commonMain/kotlin/com/haooz/chedule/ui/activities/BackupAndMigrationScreen.kt
+@@ -134,6 +134,10 @@ data class WearableDiag(
+     val listenerBound: Boolean = false,
+     val lastBindError: String = "",
+     val lastInboundError: String = "",
++    // gh6 P0 只读体积测量
++    val measureFullBytes: Int = 0,
++    val measureDateCount: Int = 0,
++    val measureMaxDateBytes: Int = 0,
+     val lastPushAtText: String = "",
+ )
+ 
+@@ -729,6 +733,10 @@ fun BackupAndMigrationScreen(
+                                     DiagRow("错误原因", diag.sendError)
+                                 }
+                                 DiagRow("载荷大小", if (diag.payloadBytes > 0) "${diag.payloadBytes} B" else "—")
++                                // gh6 P0：只读体积测量（整包 / 日期条目数 / 最大单日期）
++                                DiagRow("整包大小", if (diag.measureFullBytes > 0) "${diag.measureFullBytes} B" else "—")
++                                DiagRow("日期条目", if (diag.measureDateCount > 0) "${diag.measureDateCount} 个" else "—")
++                                DiagRow("最大单日期", if (diag.measureMaxDateBytes > 0) "${diag.measureMaxDateBytes} B" else "—")
+                                 val ackValue = when (diag.ackState) {
+                                     "ACKED" -> "已确认"
+                                     "TIMEOUT" -> "超时"
