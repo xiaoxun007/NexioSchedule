@@ -18,6 +18,10 @@ name: 同步上游并构建 Release APK
         description: 构建完成后是否创建 GitHub Release（默认否，仅产出 artifact）
         type: boolean
         default: false
+      force_gh_n:
+        description: 强制覆盖 gh 版本序号（填正整数生效；留空则按已发布 Release 计数自动递增）
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -176,7 +180,12 @@ jobs:
           MAINVER=$(echo "$VNAME" | sed 's/-.*//')
           VC=$(grep -oP 'versionCode = \K[0-9]+' "$BUILD_GRADLE")
           GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
-          GH_N=$((GH_COUNT + 1))
+          FORCE_GH_N="${{ github.event.inputs.force_gh_n }}"
+          if [ -n "$FORCE_GH_N" ] && [ "$FORCE_GH_N" -gt 0 ] 2>/dev/null; then
+            GH_N="$FORCE_GH_N"
+          else
+            GH_N=$((GH_COUNT + 1))
+          fi
           FORK_CODE=$((VC * 100 + GH_N))
           sed -i "s/versionName = \"[^\"]*\"/versionName = \"${MAINVER}-gh${GH_N}\"/" "$BUILD_GRADLE"
           sed -i "s/versionCode = [0-9]*/versionCode = ${FORK_CODE}/" "$BUILD_GRADLE"
