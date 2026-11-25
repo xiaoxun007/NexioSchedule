@@ -214,7 +214,7 @@ index 1f5f4ae4..1e682d99 100644
       * 把 overrides 裁进单包字节预算内。
       *
 diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
-index 935ffc9e..a69ee95c 100644
+index 935ffc9e..f2f8308b 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WearableScheduleSync.kt
 @@ -6,6 +6,7 @@ import android.os.Looper
@@ -279,7 +279,7 @@ index 935ffc9e..a69ee95c 100644
              sendState = "UNKNOWN"
              sendError = ""
              ackState = "NONE"
-@@ -620,6 +645,152 @@ object WearableScheduleSync {
+@@ -620,6 +645,153 @@ object WearableScheduleSync {
          pendingRetryScheduleName = ""
      }
  
@@ -327,6 +327,7 @@ index 935ffc9e..a69ee95c 100644
 +            return
 +        }
 +        batchIndex = index
++        batchRetryCount = 0
 +        val api = messageApi ?: run {
 +            finishRound(false, "手环消息通道不可用")
 +            return
@@ -432,7 +433,7 @@ index 935ffc9e..a69ee95c 100644
      /** 统一记录一次发送失败到诊断快照并释放推送槽。 */
      private fun recordSendFailure(
          detail: String,
-@@ -650,6 +821,10 @@ object WearableScheduleSync {
+@@ -650,6 +822,10 @@ object WearableScheduleSync {
              sendError = "已送达但确认超时"
              lastPushOutcome = "已送达但确认超时（手环未回 ACK）"
              lastPushAt = System.currentTimeMillis()
@@ -443,7 +444,7 @@ index 935ffc9e..a69ee95c 100644
          }, ACK_TIMEOUT_SEC, TimeUnit.SECONDS)
      }
  
-@@ -892,6 +1067,7 @@ object WearableScheduleSync {
+@@ -892,6 +1068,7 @@ object WearableScheduleSync {
          measureFullBytes = diagMeasureFullBytes,
          measureDateCount = diagMeasureDateCount,
          measureMaxDateBytes = diagMeasureMaxDateBytes,
