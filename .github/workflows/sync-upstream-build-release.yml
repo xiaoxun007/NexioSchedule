@@ -179,12 +179,16 @@ jobs:
           VNAME=$(grep -oP 'versionName = "\K[^"]+' "$BUILD_GRADLE")
           MAINVER=$(echo "$VNAME" | sed 's/-.*//')
           VC=$(grep -oP 'versionCode = \K[0-9]+' "$BUILD_GRADLE")
-          GH_COUNT=$(gh release list --repo xiaoxun007/NexioSchedule --limit 100 2>/dev/null | grep -c "^v${MAINVER}-gh" || true)
+          # gh 序号只数「已发布 tag」（refs/tags/v<主版本>-gh*），纯 artifact 构建不占号；
+          # 排除 annotated tag 的 peeled 行（^{}）。tag 与 Release 不一致时以 tag 为准。
+          GH_COUNT=$(git ls-remote --tags origin "refs/tags/v${MAINVER}-gh*" 2>/dev/null | grep -v '\^{}' | wc -l | tr -d ' ')
           FORCE_GH_N="${{ github.event.inputs.force_gh_n }}"
           if [ -n "$FORCE_GH_N" ] && [ "$FORCE_GH_N" -gt 0 ] 2>/dev/null; then
             GH_N="$FORCE_GH_N"
+            echo "当前 gh 计数=${GH_COUNT}（tag），手动覆盖本次 gh=${GH_N}"
           else
             GH_N=$((GH_COUNT + 1))
+            echo "当前 gh 计数=${GH_COUNT}（tag），本次 gh=${GH_N}"
           fi
           FORK_CODE=$((VC * 100 + GH_N))
           sed -i "s/versionName = \"[^\"]*\"/versionName = \"${MAINVER}-gh${GH_N}\"/" "$BUILD_GRADLE"
