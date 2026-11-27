@@ -11,7 +11,7 @@ index c6ded13e..5ec3a699 100644
              )
          },
 diff --git a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
-index 1f5f4ae4..1e682d99 100644
+index 1f5f4ae4..44e274f5 100644
 --- a/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
 +++ b/androidApp/src/main/java/com/haooz/chedule/wearable/WatchPayload.kt
 @@ -93,6 +93,15 @@ object WatchPayload {
@@ -30,7 +30,7 @@ index 1f5f4ae4..1e682d99 100644
      /** `,"overrides":[]` 这层信封本身的字节余量。 */
      private const val OVERRIDES_ENVELOPE_BYTES = 64
  
-@@ -286,6 +295,182 @@ object WatchPayload {
+@@ -286,6 +295,217 @@ object WatchPayload {
              .put("courses", courses)
      }
  
@@ -185,6 +185,9 @@ index 1f5f4ae4..1e682d99 100644
 +    ): JSONObject {
 +        val config = repository.getTimeConfig(repository.getScheduleTimeConfigId(scheduleId))
 +        val ctx = DayContext(config.effective(date))
++        val sectionTimes = ctx.getSectionTimes()
++        val morningSections = ctx.getMorningSections()
++        val afternoonSections = ctx.getAfternoonSections()
 +        val courses = JSONArray()
 +        for (course in resolution.courses) {
 +            val start = CourseTimeResolver.getStartTime(course, ctx)
@@ -195,8 +198,9 @@ index 1f5f4ae4..1e682d99 100644
 +                    .put("name", course.name)
 +                    .put("startTime", start ?: "")
 +                    .put("endTime", end ?: "")
++                    // periods=节次标签（第N节）；section=分组用阶段字符串键，两者互不顶替
 +                    .put("periods", course.getSectionText())
-+                    .put("section", course.startSection)
++                    .put("section", daySectionKey(course, sectionTimes, morningSections, afternoonSections, start))
 +                    .put("location", course.classroom ?: "")
 +                    .put("teacher", course.teacher ?: "")
 +            )
@@ -208,6 +212,37 @@ index 1f5f4ae4..1e682d99 100644
 +            .put("isHoliday", resolution.isHolidayDate)
 +            .put("isWorkSwap", resolution.isWorkSwap)
 +            .put("courses", courses)
++    }
++
++    /**
++     * 课程所属分组键（"morning"/"afternoon"/"evening"），供手环 `groupBySection` 分桶。
++     *
++     * ⚠ 这里下发的是阶段字符串键，不是节次序号：手环 `SECTION_META` 只认
++     * morning/afternoon/evening，整数节次号取不到桶会被兜底成 afternoon。
++     * 时段边界取当天作息配置 morningSections/afternoonSections（复用 [Course.periodIndex]），
++     * 不写死钟点；节次号缺失/越界时按开始钟点兜底（<12 上午，<18 下午，否则晚上）。
++     */
++    private fun daySectionKey(
++        course: Course,
++        sectionTimes: Map<Int, String>,
++        morningSections: Int,
++        afternoonSections: Int,
++        startTime: String?,
++    ): String {
++        if (course.startSection > 0) {
++            when (course.periodIndex(sectionTimes, morningSections, afternoonSections)) {
++                Course.PERIOD_MORNING -> return "morning"
++                Course.PERIOD_AFTERNOON -> return "afternoon"
++                Course.PERIOD_EVENING -> return "evening"
++            }
++        }
++        val hh = (startTime ?: "").substringBefore(":").trim().toIntOrNull()
++        return when {
++            hh == null -> "afternoon"
++            hh < 12 -> "morning"
++            hh < 18 -> "afternoon"
++            else -> "evening"
++        }
 +    }
 +
      /**

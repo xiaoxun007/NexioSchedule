@@ -19,7 +19,7 @@ name: 同步上游并构建 Release APK
         type: boolean
         default: false
       force_gh_n:
-        description: 强制覆盖 gh 版本序号（填正整数生效；留空则按已发布 Release 计数自动递增）
+        description: 强制覆盖 gh 版本序号（填正整数生效；留空则按已发布 tag 计数自动递增）
         type: string
         default: ""
 
